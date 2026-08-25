@@ -1,7 +1,11 @@
 import { action, computed, observable } from "mobx";
 import type { PropsWithChildren } from "react";
 import { createContext, useContext, useMemo } from "react";
+import type { Node } from "prosemirror-model";
+import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import type { Heading } from "@shared/utils/ProsemirrorHelper";
+import type { TextStats } from "~/hooks/useTextStats";
+import { getTextStats } from "~/hooks/useTextStats";
 import type Document from "~/models/Document";
 import type { Editor } from "~/editor";
 
@@ -26,11 +30,24 @@ class DocumentContext {
 
   @computed
   get hasHeadings() {
-    return this.headings.length > 0;
+    // Headings inside tables are not listed in the table of contents.
+    return this.headings.some((heading) => !heading.inTable);
+  }
+
+  /** Statistics for the text content of the document, kept up to date as it is edited */
+  @computed
+  get stats(): TextStats {
+    return getTextStats(
+      this.editorDoc ? ProsemirrorHelper.toPlainText(this.editorDoc) : ""
+    );
   }
 
   @action
   setDocument = (document: Document) => {
+    // Reset the focused comment when navigating between documents
+    if (this.document && this.document.id !== document.id) {
+      this.focusedCommentId = null;
+    }
     this.document = document;
     this.updateState();
   };
@@ -53,9 +70,14 @@ class DocumentContext {
 
   @action
   updateState = () => {
+    this.editorDoc = this.editor?.view.state.doc;
     this.updateHeadings();
     this.updateTasks();
   };
+
+  /** The ProseMirror document currently held by the editor */
+  @observable.ref
+  private editorDoc: Node | undefined;
 
   private updateHeadings() {
     const currHeadings = this.editor?.getHeadings() ?? [];

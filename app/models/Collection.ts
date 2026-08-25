@@ -67,6 +67,11 @@ export default class Collection extends ParanoidModel {
     direction: "asc" | "desc";
   };
 
+  /** The minimum permission level required to manage templates in this collection. */
+  @Field
+  @observable
+  templateManagement: CollectionPermission;
+
   /**
    * Whether commenting is enabled for the collection.
    */
@@ -155,6 +160,29 @@ export default class Collection extends ParanoidModel {
       return undefined;
     }
     return sortNavigationNodes(this.documents, this.sort);
+  }
+
+  /**
+   * Returns a lookup from document id to child documents.
+   *
+   * @returns a map of document id to child document nodes.
+   */
+  @computed({ keepAlive: true })
+  get childrenByDocumentId(): Map<string, NavigationNode[]> {
+    const childrenByDocumentId = new Map<string, NavigationNode[]>();
+
+    const travelNodes = (nodes: NavigationNode[]) => {
+      for (const node of nodes) {
+        childrenByDocumentId.set(node.id, node.children);
+        travelNodes(node.children);
+      }
+    };
+
+    if (this.sortedDocuments) {
+      travelNodes(this.sortedDocuments);
+    }
+
+    return childrenByDocumentId;
   }
 
   /** The initial letter of the collection name as a string. */
@@ -313,32 +341,8 @@ export default class Collection extends ParanoidModel {
     this.index = index;
   }
 
-  @action
-  share = async () =>
-    this.store.rootStore.shares.create({
-      type: "collection",
-      collectionId: this.id,
-    });
-
   getChildrenForDocument(documentId: string) {
-    let result: NavigationNode[] = [];
-
-    const travelNodes = (nodes: NavigationNode[]) => {
-      nodes.forEach((node) => {
-        if (node.id === documentId) {
-          result = node.children;
-          return;
-        }
-
-        return travelNodes(node.children);
-      });
-    };
-
-    if (this.sortedDocuments) {
-      travelNodes(this.sortedDocuments);
-    }
-
-    return result;
+    return this.childrenByDocumentId.get(documentId) ?? [];
   }
 
   @computed
@@ -417,6 +421,14 @@ export default class Collection extends ParanoidModel {
   archive = () => this.store.archive(this);
 
   restore = () => this.store.restore(this);
+
+  /**
+   * Duplicates the collection and the published documents within it.
+   *
+   * @returns A promise that resolves to the duplicated collection.
+   */
+  duplicate = (options?: { name?: string }) =>
+    this.store.duplicate(this, options);
 
   export = (format: FileOperationFormat, includeAttachments: boolean) =>
     client.post("/collections.export", {

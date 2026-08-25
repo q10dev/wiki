@@ -2,7 +2,7 @@ import * as PopoverPrimitive from "@radix-ui/react-popover";
 import * as React from "react";
 import { mergeRefs } from "react-merge-refs";
 import styled from "styled-components";
-import { depths, s } from "@shared/styles";
+import { depths, s, borderRadius } from "@shared/styles";
 import { fadeAndScaleIn } from "~/styles/animations";
 import { usePortalContext } from "../Portal";
 
@@ -44,7 +44,7 @@ const PopoverContent = React.forwardRef<
   const timeoutRef = React.useRef<NodeJS.Timeout>();
   const container = usePortalContext();
   const {
-    width = 380,
+    width,
     minWidth,
     minHeight,
     scrollable = true,
@@ -53,6 +53,7 @@ const PopoverContent = React.forwardRef<
     children,
     ...rest
   } = props;
+  const resolvedWidth = width ?? (minWidth ? undefined : 380);
 
   const enablePointerEvents = React.useCallback(() => {
     if (timeoutRef.current) {
@@ -78,7 +79,7 @@ const PopoverContent = React.forwardRef<
       <StyledContent
         ref={mergeRefs([ref, forwardedRef])}
         sideOffset={sideOffset}
-        $width={width}
+        $width={resolvedWidth}
         $minWidth={minWidth}
         $minHeight={minHeight}
         $scrollable={scrollable}
@@ -109,7 +110,7 @@ const StyledContent = styled(PopoverPrimitive.Content)<StyledContentProps>`
 
   background: ${s("menuBackground")};
   box-shadow: ${s("menuShadow")};
-  border-radius: 6px;
+  ${borderRadius(8)}
   outline: none;
 
   padding: ${({ $shrink }) => ($shrink ? "6px 0" : "12px 24px")};

@@ -1,5 +1,4 @@
-import orderBy from "lodash/orderBy";
-import filter from "lodash/filter";
+import { filter, orderBy } from "es-toolkit/compat";
 import { action, computed } from "mobx";
 import { invariant } from "mobx-utils";
 import naturalSort from "@shared/utils/naturalSort";
@@ -13,9 +12,19 @@ export default class TemplatesStore extends Store<Template> {
     super(rootStore, Template);
   }
 
+  /**
+   * Templates that are published, and so available to insert into documents.
+   */
+  @computed
+  get published(): Template[] {
+    return this.orderedData.filter(
+      (template) => template.isActive && !template.isDraft
+    );
+  }
+
   @computed
   get alphabetical(): Template[] {
-    return naturalSort(Array.from(this.data.values()), "title");
+    return naturalSort(this.published, "title");
   }
 
   @computed

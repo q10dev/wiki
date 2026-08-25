@@ -1,7 +1,8 @@
 import * as InputSelectPrimitive from "@radix-ui/react-select";
 import * as React from "react";
 import styled from "styled-components";
-import { depths, s } from "@shared/styles";
+import Text from "@shared/components/Text";
+import { depths, s, borderRadius } from "@shared/styles";
 import type { Props as ButtonProps } from "~/components/Button";
 import { fadeAndSlideDown, fadeAndSlideUp } from "~/styles/animations";
 import {
@@ -22,19 +23,27 @@ export type TriggerButtonProps = {
   className?: string;
 } & Pick<ButtonProps<unknown>, "borderOnHover">;
 
-type InputSelectTriggerProps = { placeholder: string } & TriggerButtonProps &
+type InputSelectTriggerProps = {
+  placeholder: string;
+  /** When provided, overrides the selected value rendered inside the trigger. */
+  displayValue?: React.ReactNode;
+} & TriggerButtonProps &
   React.ComponentPropsWithoutRef<typeof InputSelectPrimitive.Trigger>;
 
 const InputSelectTrigger = React.forwardRef<
   React.ElementRef<typeof InputSelectPrimitive.Trigger>,
   InputSelectTriggerProps
 >((props, ref) => {
-  const { placeholder, children, nude, ...buttonProps } = props;
+  const { placeholder, children, nude, displayValue, ...buttonProps } = props;
 
   return (
     <InputSelectPrimitive.Trigger ref={ref} asChild>
       <SelectButton neutral disclosure $nude={nude} {...buttonProps}>
-        <InputSelectPrimitive.Value placeholder={placeholder} />
+        {displayValue !== undefined ? (
+          <>{displayValue}</>
+        ) : (
+          <InputSelectPrimitive.Value placeholder={placeholder} />
+        )}
       </SelectButton>
     </InputSelectPrimitive.Trigger>
   );
@@ -102,6 +111,31 @@ const Separator = styled.hr`
   margin: 6px 0;
 `;
 
+/** Non-selectable heading rendered to group options in the menu. */
+const InputSelectHeading = React.forwardRef<
+  HTMLSpanElement,
+  { children?: React.ReactNode }
+>(({ children }, ref) => (
+  <InputSelectPrimitive.Group>
+    <InputSelectPrimitive.Label asChild>
+      <Heading ref={ref}>{children}</Heading>
+    </InputSelectPrimitive.Label>
+  </InputSelectPrimitive.Group>
+));
+InputSelectHeading.displayName = "InputSelectHeading";
+
+const Heading = styled(Text).attrs({
+  type: "tertiary",
+  size: "xsmall",
+  weight: "bold",
+})`
+  display: block;
+  padding-block: 8px 4px;
+  padding-inline: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+`;
+
 /** Styled components. */
 const StyledContent = styled(InputSelectPrimitive.Content)`
   z-index: ${depths.menu};
@@ -111,7 +145,7 @@ const StyledContent = styled(InputSelectPrimitive.Content)`
   max-height: 350px;
 
   padding: 4px;
-  border-radius: 6px;
+  ${borderRadius(8)}
   background: ${s("menuBackground")};
   box-shadow: ${s("menuShadow")};
   transform-origin: 50% 0;
@@ -135,4 +169,5 @@ export {
   InputSelectContent,
   InputSelectItem,
   InputSelectSeparator,
+  InputSelectHeading,
 };

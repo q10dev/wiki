@@ -1,15 +1,30 @@
-import pick from "lodash/pick";
+import { isEqual, pick } from "es-toolkit/compat";
 import { observable, action, toJS } from "mobx";
 import type { JSONObject } from "@shared/types";
 import type Store from "~/stores/base/Store";
+import type { PartialExcept } from "~/types";
 import Logger from "~/utils/Logger";
-import { getFieldsForModel } from "../decorators/Field";
+import { getFieldsForModel, getFieldsForModelClass } from "../decorators/Field";
 import { LifecycleManager } from "../decorators/Lifecycle";
 import { getRelationsForModelClass } from "../decorators/Relation";
-import { isEqual } from "lodash";
 
 export default abstract class Model {
   static modelName: string;
+
+  /**
+   * Restores data written by toPersisted to the shape the model expects,
+   * discarding any properties that are not declared fields. Records written by
+   * a different version of the app may not match the current model.
+   *
+   * @param record the persisted representation of a model.
+   * @returns the data to construct or update a model with.
+   */
+  static fromPersisted<T extends Model>(
+    record: Record<string, unknown>
+  ): PartialExcept<T, "id"> {
+    const fields = getFieldsForModelClass(this);
+    return JSON.parse(JSON.stringify(pick(record, ["id", ...fields])));
+  }
 
   @observable
   id: string;
@@ -28,7 +43,7 @@ export default abstract class Model {
 
   store: Store<Model>;
 
-  constructor(fields: Record<string, any>, store: Store<Model>) {
+  constructor(fields: Record<string, unknown>, store: Store<Model>) {
     this.store = store;
     this.updateData(fields);
     this.isNew = !this.id;
@@ -43,7 +58,7 @@ export default abstract class Model {
   async loadRelations(
     this: Model,
     options: { withoutPolicies?: boolean } = {}
-  ): Promise<any> {
+  ): Promise<unknown> {
     // this is to ensure that multiple loads don’t happen in parallel
     if (this.loadingRelations) {
       return this.loadingRelations;
@@ -60,7 +75,7 @@ export default abstract class Model {
         const store = this.store.rootStore.getStoreForModelName(
           properties.relationClassResolver().modelName
         );
-        if ("fetch" in store) {
+        if ("canFetchById" in store && store.canFetchById) {
           const id = this[properties.idKey];
           if (id) {
             promises.push(store.fetch(id as string));
@@ -70,7 +85,7 @@ export default abstract class Model {
     }
 
     const policy = this.store.rootStore.policies.get(this.id);
-    if (!policy && !options.withoutPolicies) {
+    if (!policy && !options.withoutPolicies && this.store.canFetchById) {
       promises.push(this.store.fetch(this.id, { force: true }));
     }
 
@@ -90,7 +105,7 @@ export default abstract class Model {
    * @returns A promise that resolves with the updated model
    */
   save = async (
-    params?: Record<string, any>,
+    params?: Record<string, unknown>,
     options?: Record<string, string | boolean | number | undefined>
   ): Promise<Model> => {
     const isNew = this.isNew;
@@ -120,7 +135,7 @@ export default abstract class Model {
       );
 
       // if saving is successful set the new values on the model itself
-      this.updateData({ ...params, ...model });
+      this.updateData(Object.assign({}, params, model));
 
       if (isNew) {
         LifecycleManager.executeHooks(this.constructor, "afterCreate", this);
@@ -134,7 +149,7 @@ export default abstract class Model {
     }
   };
 
-  updateData = action((data: Partial<Model>) => {
+  updateData = action((data: Record<string, unknown>) => {
     if (this.initialized) {
       LifecycleManager.executeHooks(this.constructor, "beforeChange", this);
     }
@@ -154,7 +169,7 @@ export default abstract class Model {
         // @ts-expect-error TODO
         this[key] = data[key];
       } catch (error) {
-        Logger.warn(`Error setting ${key} on model`, error);
+        Logger.warn(`Error setting ${key} on model`, { error });
       }
     }
 
@@ -197,10 +212,20 @@ export default abstract class Model {
    *
    * @returns A plain object representation of the model
    */
-  toAPI = (): Record<string, any> => {
+  toAPI = (): Partial<Model> => {
     const fields = getFieldsForModel(this);
     return pick(this, fields);
   };
+
+  /**
+   * Returns a plain object representation of the model, containing its
+   * identifier and declared fields only, safe to store outside of memory.
+   * Internal state and observables are not included.
+   *
+   * @returns A plain object representation of the model
+   */
+  toPersisted = (): PartialExcept<Model, "id"> =>
+    JSON.parse(JSON.stringify({ ...this.toAPI(), id: this.id }));
 
   /**
    * Returns a plain object representation of all the properties on the model
@@ -247,7 +272,7 @@ export default abstract class Model {
   protected persistedAttributes: Partial<Model> = {};
 
   /** A promise that resolves when all relations have been loaded. */
-  private loadingRelations: Promise<any[]> | undefined;
+  private loadingRelations: Promise<unknown[]> | undefined;
 
   /** A boolean representing if the constructor has been called. */
   private initialized = false;

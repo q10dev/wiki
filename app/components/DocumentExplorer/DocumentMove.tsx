@@ -3,6 +3,7 @@ import { useState, useMemo } from "react";
 import { useTranslation, Trans } from "react-i18next";
 import { toast } from "sonner";
 import type { NavigationNode } from "@shared/types";
+import { descendants, flattenTree } from "@shared/utils/tree";
 import type Document from "~/models/Document";
 import Button from "~/components/Button";
 import Text from "~/components/Text";
@@ -23,13 +24,23 @@ function DocumentMove({ document }: Props) {
   const [selectedPath, selectPath] = useState<NavigationNode | null>(null);
 
   const items = useMemo(() => {
-    // Recursively filter out the document itself and its existing parent doc, if any.
+    // Collect the IDs of the document itself and all of its descendants so they
+    // can be excluded from the move targets (moving to self or a descendant
+    // would create a cycle; moving to the exact same location is a no-op).
+    const allNodes = collectionTrees.flatMap(flattenTree);
+    const sourceNode = allNodes.find((node) => node.id === document.id);
+    const excludedIds = new Set<string>([document.id]);
+    if (sourceNode) {
+      descendants(sourceNode).forEach((n) => excludedIds.add(n.id));
+    }
+
+    // Recursively filter out the document itself and its descendants.
+    // The document's current parent is intentionally kept so that siblings
+    // remain visible as valid move targets.
     const filterSourceDocument = (node: NavigationNode): NavigationNode => ({
       ...node,
       children: node.children
-        ?.filter(
-          (c) => c.id !== document.id && c.id !== document.parentDocumentId
-        )
+        ?.filter((c) => !excludedIds.has(c.id))
         .map(filterSourceDocument),
     });
 
@@ -43,19 +54,19 @@ function DocumentMove({ document }: Props) {
       );
 
     return nodes;
-  }, [policies, collectionTrees, document.id, document.parentDocumentId]);
+  }, [policies, collectionTrees, document.id]);
 
-  const move = async () => {
-    if (!selectedPath) {
+  const move = async (path = selectedPath) => {
+    if (!path) {
       toast.message(t("Select a location to move"));
       return;
     }
 
     try {
       setMoving(true);
-      const { type, id: parentDocumentId } = selectedPath;
+      const { type, id: parentDocumentId } = path;
 
-      const collectionId = selectedPath.collectionId as string;
+      const collectionId = path.collectionId as string;
 
       if (type === "document") {
         await document.move({ collectionId, parentDocumentId });
@@ -92,7 +103,7 @@ function DocumentMove({ document }: Props) {
             t("Select a location to move")
           )}
         </Text>
-        <Button disabled={!selectedPath || moving} onClick={move}>
+        <Button disabled={!selectedPath || moving} onClick={() => move()}>
           {moving ? `${t("Moving")}…` : t("Move")}
         </Button>
       </Footer>

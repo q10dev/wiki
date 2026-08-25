@@ -3,6 +3,7 @@ import { Node } from "prosemirror-model";
 import headingToSlug from "../editor/lib/headingToSlug";
 import textBetween from "../editor/lib/textBetween";
 import type { ProsemirrorData } from "../types";
+import { hashString } from "./string";
 import { TextHelper } from "./TextHelper";
 import env from "../env";
 import { findChildren } from "@shared/editor/queries/findChildren";
@@ -16,6 +17,8 @@ export type Heading = {
   level: number;
   /* The unique id of the heading */
   id: string;
+  /* Whether the heading is nested inside a table */
+  inTable?: boolean;
 };
 
 export type CommentMark = {
@@ -49,44 +52,31 @@ export const attachmentPublicRegex =
 
 export class ProsemirrorHelper {
   /**
-   * Get a new empty document.
+   * Remove specific mark types from all nodes in the document.
    *
-   * @returns A new empty document as JSON.
+   * @param doc the prosemirror document or JSON data.
+   * @param marks the mark type names to remove.
+   * @returns the document data with specified marks removed.
    */
-  static getEmptyDocument(): ProsemirrorData {
-    return {
-      type: "doc",
-      content: [
-        {
-          content: [],
-          type: "paragraph",
-        },
-      ],
-    };
-  }
+  static removeMarks(doc: Node | ProsemirrorData, marks: string[]) {
+    const json = "toJSON" in doc ? (doc.toJSON() as ProsemirrorData) : doc;
+    const markSet = new Set(marks);
 
-  /**
-   * Returns true if the data looks like an empty document.
-   *
-   * @param data The ProsemirrorData to check.
-   * @returns True if the document is empty.
-   */
-  static isEmptyData(data: ProsemirrorData): boolean {
-    if (data.type !== "doc") {
-      return false;
+    function removeMarksInner(node: ProsemirrorData) {
+      if (node.marks) {
+        node.marks = node.marks.filter((mark) => !markSet.has(mark.type));
+      }
+      if (node.attrs?.marks) {
+        node.attrs.marks = (node.attrs.marks as { type: string }[])?.filter(
+          (mark) => !markSet.has(mark.type)
+        );
+      }
+      if (node.content) {
+        node.content.forEach(removeMarksInner);
+      }
+      return node;
     }
-
-    if (data.content?.length === 1) {
-      const node = data.content[0];
-      return (
-        node.type === "paragraph" &&
-        (node.content === null ||
-          node.content === undefined ||
-          node.content.length === 0)
-      );
-    }
-
-    return !data.content || data.content.length === 0;
+    return removeMarksInner(json);
   }
 
   /**
@@ -191,7 +181,12 @@ export class ProsemirrorHelper {
         }
       });
 
-      (node.attrs.marks ?? []).forEach((mark: any) => {
+      (
+        (node.attrs.marks ?? []) as {
+          type: string;
+          attrs: Partial<CommentMark>;
+        }[]
+      ).forEach((mark) => {
         if (mark.type === "comment") {
           comments.push({
             ...mark.attrs,
@@ -243,7 +238,9 @@ export class ProsemirrorHelper {
     const anchors: NodeAnchor[] = [];
     doc.descendants((node, pos) => {
       if (Array.isArray(node.attrs?.marks)) {
-        node.attrs.marks.forEach((mark: any) => {
+        (
+          node.attrs.marks as { type?: string; attrs?: { id?: string } }[]
+        ).forEach((mark) => {
           if (mark?.type === "comment" && mark?.attrs?.id) {
             anchors.push({
               pos,
@@ -263,6 +260,76 @@ export class ProsemirrorHelper {
       ...ProsemirrorHelper.getAnchorsForHeadingNodes(doc),
       ...ProsemirrorHelper.getAnchorsForImageNodes(doc),
     ];
+  }
+
+  /**
+   * Computes a stable identifier for a node derived from its type and
+   * attributes. The `marks` attribute is excluded as it changes when comments
+   * are added or removed from the node.
+   *
+   * @param node the node to compute an identifier for.
+   * @returns a hex-encoded hash identifying the node.
+   */
+  static getNodeHash(node: Node): string {
+    const { marks: _marks, ...attrs } = node.attrs;
+    const sorted = Object.keys(attrs)
+      .sort()
+      .reduce<Record<string, unknown>>((acc, key) => {
+        acc[key] = attrs[key];
+        return acc;
+      }, {});
+
+    return hashString(`${node.type.name}:${JSON.stringify(sorted)}`);
+  }
+
+  /**
+   * Finds a node in the document by the hash of its attributes, see
+   * `getNodeHash`. When multiple nodes share the same hash the first
+   * occurrence in document order is returned.
+   *
+   * @param doc Prosemirror document node.
+   * @param hash the node hash to search for.
+   * @returns the matching node and its position, or null if no match.
+   */
+  static findNodeByHash(
+    doc: Node,
+    hash: string
+  ): { node: Node; pos: number } | null {
+    let result: { node: Node; pos: number } | null = null;
+
+    doc.descendants((node, pos) => {
+      if (result) {
+        return false;
+      }
+      if (!node.isText && ProsemirrorHelper.getNodeHash(node) === hash) {
+        result = { node, pos };
+        return false;
+      }
+      return true;
+    });
+
+    return result;
+  }
+
+  /**
+   * Returns the ids of comment marks attached to the node at the given position.
+   *
+   * @param doc Prosemirror document node.
+   * @param pos Position of the node within the document.
+   * @returns array of comment ids anchored to the node.
+   */
+  static getCommentIdsAtPos(doc: Node, pos: number): string[] {
+    const node = doc.nodeAt(pos);
+    if (!node || !Array.isArray(node.attrs?.marks)) {
+      return [];
+    }
+
+    return (node.attrs.marks as { type?: string; attrs?: { id?: string } }[])
+      .filter(
+        (mark): mark is { type: "comment"; attrs: { id: string } } =>
+          mark?.type === "comment" && !!mark?.attrs?.id
+      )
+      .map((mark) => mark.attrs.id);
   }
 
   /**
@@ -428,8 +495,13 @@ export class ProsemirrorHelper {
   static getHeadings(doc: Node) {
     const headings: Heading[] = [];
     const previouslySeen: Record<string, number> = {};
+    let tableEnd = 0;
 
-    doc.descendants((node) => {
+    doc.descendants((node, pos) => {
+      if (node.type.name === "table") {
+        // A nested table must not shrink the range of its outer table.
+        tableEnd = Math.max(tableEnd, pos + node.nodeSize);
+      }
       if (node.type.name === "heading") {
         // calculate the optimal id
         const id = headingToSlug(node);
@@ -450,6 +522,7 @@ export class ProsemirrorHelper {
           title: ProsemirrorHelper.toPlainText(node),
           level: node.attrs.level,
           id: name,
+          inTable: pos < tableEnd,
         });
       }
     });
@@ -471,19 +544,19 @@ export class ProsemirrorHelper {
       if (
         node.type === "image" &&
         node.attrs?.src &&
-        regex.test(String(node.attrs.src))
+        regex.test(node.attrs.src as string)
       ) {
         node.attrs.src = env.URL + node.attrs.src;
       } else if (
         node.type === "video" &&
         node.attrs?.src &&
-        regex.test(String(node.attrs.src))
+        regex.test(node.attrs.src as string)
       ) {
         node.attrs.src = env.URL + node.attrs.src;
       } else if (
         node.type === "attachment" &&
         node.attrs?.href &&
-        regex.test(String(node.attrs.href))
+        regex.test(node.attrs.href as string)
       ) {
         node.attrs.href = env.URL + node.attrs.href;
       }

@@ -1,14 +1,11 @@
 import { z } from "zod";
 import { Sequelize, Op, type WhereOptions } from "sequelize";
-import {
-  type McpServer,
-  ResourceTemplate,
-} from "@modelcontextprotocol/sdk/server/mcp.js";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { CollectionPermission } from "@shared/types";
+import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Collection, Team } from "@server/models";
+import { buildWhere } from "@server/models/helpers/Filters";
+import { sequelize } from "@server/storage/database";
 import { authorize } from "@server/policies";
-import { presentCollection } from "@server/presenters";
+import { presentCollection as presentCollectionBase } from "@server/presenters";
 import AuthenticationHelper from "@shared/helpers/AuthenticationHelper";
 import { UrlHelper } from "@shared/utils/UrlHelper";
 import {
@@ -16,14 +13,30 @@ import {
   error,
   getActorFromContext,
   buildAPIContext,
+  getPublicShareUrlsForCollections,
+  optionalString,
   pathToUrl,
   withTracing,
-  withResourceTracing,
 } from "./util";
 
 /**
- * Registers collection-related MCP tools and resources on the given server,
- * filtered by the OAuth scopes granted to the current token.
+ * Presents a collection for a tool response. Includes a markdown description
+ * instead of ProseMirror JSON so that MCP consumers (typically AI agents) can
+ * read it directly.
+ *
+ * @param collection - the collection to present.
+ * @returns the presented collection object.
+ */
+export function presentCollection(collection: Collection) {
+  return presentCollectionBase(undefined, collection, {
+    includeData: false,
+    includeText: true,
+  });
+}
+
+/**
+ * Registers collection-related MCP tools on the given server, filtered by
+ * the OAuth scopes granted to the current token.
  *
  * @param server - the MCP server instance to register on.
  * @param scopes - the OAuth scopes granted to the access token.
@@ -41,19 +54,16 @@ export function collectionTools(server: McpServer, scopes: string[]) {
           readOnlyHint: true,
         },
         inputSchema: {
-          query: z
-            .string()
-            .optional()
-            .describe(
-              "An optional search query to filter collections by name."
-            ),
-          offset: z
+          query: optionalString().describe(
+            "An optional search query to filter collections by name."
+          ),
+          offset: z.coerce
             .number()
             .int()
             .min(0)
             .optional()
             .describe("The pagination offset. Defaults to 0."),
-          limit: z
+          limit: z.coerce
             .number()
             .int()
             .min(1)
@@ -79,9 +89,11 @@ export function collectionTools(server: McpServer, scopes: string[]) {
 
             if (query) {
               and.push(
-                Sequelize.literal(
-                  `unaccent(LOWER(name)) like unaccent(LOWER(:query))`
-                ) as unknown as WhereOptions<Collection>
+                buildWhere<Collection>({
+                  field: "name",
+                  operator: "contains",
+                  value: query,
+                })
               );
             }
 
@@ -94,7 +106,6 @@ export function collectionTools(server: McpServer, scopes: string[]) {
               method: ["withMembership", user.id],
             }).findAll({
               where,
-              replacements: { query: `%${query}%` },
               order: [
                 Sequelize.literal('"collection"."index" collate "C"'),
                 ["updatedAt", "DESC"],
@@ -115,78 +126,40 @@ export function collectionTools(server: McpServer, scopes: string[]) {
               }
             }
 
-            const presented = await Promise.all(
-              collections
-                .filter((c) => c.id !== exactMatch?.id)
-                .map(async (collection) =>
-                  pathToUrl(
+            const matchedCollections = [
+              ...(exactMatch ? [exactMatch] : []),
+              ...collections.filter((c) => c.id !== exactMatch?.id),
+            ];
+            const [shareUrls, presented] = await Promise.all([
+              getPublicShareUrlsForCollections(
+                user.team,
+                matchedCollections.map((c) => c.id)
+              ),
+              Promise.all(
+                matchedCollections.map(async (collection) => ({
+                  collection,
+                  presented: pathToUrl(
                     user.team,
-                    await presentCollection(undefined, collection)
-                  )
-                )
-            );
+                    await presentCollection(collection)
+                  ),
+                }))
+              ),
+            ]);
 
-            if (exactMatch) {
-              presented.unshift(
-                pathToUrl(
-                  user.team,
-                  await presentCollection(undefined, exactMatch)
-                )
-              );
-            }
+            const results = presented.map(({ collection, presented }) => {
+              const shareUrl = shareUrls.get(collection.id);
+              return {
+                ...presented,
+                ...(shareUrl !== undefined && { shareUrl }),
+              };
+            });
 
-            return success(presented);
+            return success(results);
           } catch (message) {
             return error(message);
           }
         }
       )
-    );
-  }
-
-  if (AuthenticationHelper.canAccess("collections.info", scopes)) {
-    server.registerResource(
-      "get_collection",
-      new ResourceTemplate("outline://collections/{id}", { list: undefined }),
-      {
-        title: "Get collection",
-        description:
-          "Fetches the details of a collection by its ID, including its document structure.",
-        mimeType: "application/json",
-      },
-      withResourceTracing("get_collection", async (uri, variables, extra) => {
-        try {
-          const { id } = variables;
-          const user = getActorFromContext(extra);
-          const collection = await Collection.findByPk(String(id), {
-            includeDocumentStructure: true,
-            rejectOnEmpty: true,
-          });
-
-          authorize(user, "read", collection);
-
-          const presented = await presentCollection(undefined, collection);
-          return {
-            contents: [
-              {
-                uri: uri.href,
-                mimeType: "application/json",
-                text: JSON.stringify(pathToUrl(user.team, presented)),
-              },
-              {
-                uri: uri.href,
-                mimeType: "application/json",
-                text: JSON.stringify(collection.documentStructure ?? []),
-              },
-            ],
-          };
-        } catch (err) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            err instanceof Error ? err.message : String(err)
-          );
-        }
-      })
     );
   }
 
@@ -207,14 +180,12 @@ export function collectionTools(server: McpServer, scopes: string[]) {
             .string()
             .optional()
             .describe("A markdown description for the collection."),
-          icon: z
-            .string()
-            .optional()
-            .describe("An icon for the collection, e.g. an emoji."),
-          color: z
-            .string()
-            .optional()
-            .describe("The hex color for the collection icon, e.g. #FF0000."),
+          icon: optionalString().describe(
+            "An icon for the collection. May be an emoji or a named icon; read the outline://icons resource for the list of available icon names."
+          ),
+          color: optionalString().describe(
+            "The hex color for the collection icon, e.g. #FF0000."
+          ),
         },
       },
       withTracing("create_collection", async (input, context) => {
@@ -233,21 +204,19 @@ export function collectionTools(server: McpServer, scopes: string[]) {
             color: input.color,
             teamId: user.teamId,
             createdById: user.id,
-            permission: CollectionPermission.ReadWrite,
+            permission: null,
           });
 
           await collection.saveWithCtx(ctx);
 
-          const reloaded = await Collection.findByPk(collection.id, {
-            userId: user.id,
-            rejectOnEmpty: true,
+          return success({
+            success: true,
+            ...pathToUrl(user.team, {
+              id: collection.id,
+              name: collection.name,
+              url: collection.path,
+            }),
           });
-
-          const presented = pathToUrl(
-            user.team,
-            await presentCollection(undefined, reloaded)
-          );
-          return success(presented);
         } catch (message) {
           return error(message);
         }
@@ -263,17 +232,14 @@ export function collectionTools(server: McpServer, scopes: string[]) {
         description:
           "Updates an existing collection by its ID. Only the fields provided will be updated.",
         annotations: {
-          idempotentHint: true,
+          idempotentHint: false,
           readOnlyHint: false,
         },
         inputSchema: {
           id: z
             .string()
             .describe("The unique identifier of the collection to update."),
-          name: z
-            .string()
-            .optional()
-            .describe("The new name for the collection."),
+          name: optionalString().describe("The new name for the collection."),
           description: z
             .string()
             .optional()
@@ -283,7 +249,7 @@ export function collectionTools(server: McpServer, scopes: string[]) {
             .nullable()
             .optional()
             .describe(
-              "An icon for the collection, e.g. an emoji. Set to null to remove."
+              "An icon for the collection. Set to null to remove. May be an emoji or a named icon; read the outline://icons resource for the list of available icon names."
             ),
           color: z
             .string()
@@ -318,13 +284,81 @@ export function collectionTools(server: McpServer, scopes: string[]) {
             collection.color = input.color;
           }
 
+          // A write that changes nothing must fail loud rather than return a
+          // success the caller would read as a completed write — the request
+          // either carried no recognized fields or values identical to the
+          // current collection.
+          if (!collection.changed()) {
+            return error(
+              "The update resulted in no changes to the collection. Ensure at least one field is provided and differs from the current collection."
+            );
+          }
+
           await collection.saveWithCtx(ctx);
 
-          const presented = pathToUrl(
-            user.team,
-            await presentCollection(undefined, collection)
-          );
-          return success(presented);
+          return success({
+            success: true,
+            ...pathToUrl(user.team, {
+              id: collection.id,
+              name: collection.name,
+              url: collection.path,
+            }),
+          });
+        } catch (message) {
+          return error(message);
+        }
+      })
+    );
+  }
+
+  if (AuthenticationHelper.canAccess("collections.delete", scopes)) {
+    server.registerTool(
+      "delete_collection",
+      {
+        title: "Delete collection",
+        description:
+          "Deletes a collection by its ID. Non-archived documents within the collection will also be deleted. Set archive to true to archive the collection instead of deleting it.",
+        annotations: {
+          idempotentHint: false,
+          readOnlyHint: false,
+        },
+        inputSchema: {
+          id: z
+            .string()
+            .describe("The unique identifier of the collection to delete."),
+          archive: z
+            .boolean()
+            .optional()
+            .describe(
+              "Set to true to archive the collection instead of deleting it. All documents within the collection will also be archived."
+            ),
+        },
+      },
+      withTracing("delete_collection", async ({ id, archive }, context) => {
+        try {
+          const ctx = buildAPIContext(context);
+          const { user } = ctx.state.auth;
+
+          await sequelize.transaction(async (transaction) => {
+            ctx.state.transaction = transaction;
+            ctx.context.transaction = transaction;
+
+            const collection = await Collection.findByPk(id, {
+              userId: user.id,
+              rejectOnEmpty: true,
+              transaction,
+            });
+
+            if (archive) {
+              authorize(user, "archive", collection);
+              await collection.archiveWithCtx(ctx);
+            } else {
+              authorize(user, "delete", collection);
+              await collection.destroyWithCtx(ctx);
+            }
+          });
+
+          return success({ success: true });
         } catch (message) {
           return error(message);
         }

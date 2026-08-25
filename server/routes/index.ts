@@ -5,7 +5,7 @@ import Koa from "koa";
 import Router from "koa-router";
 import send from "koa-send";
 import { languages } from "@shared/i18n";
-import { IntegrationType, TeamPreference } from "@shared/types";
+import { TeamPreference } from "@shared/types";
 import { parseDomain } from "@shared/utils/domains";
 import { Day } from "@shared/utils/time";
 import env from "@server/env";
@@ -15,6 +15,7 @@ import { Integration } from "@server/models";
 import { opensearchResponse } from "@server/utils/opensearch";
 import { getTeamFromContext } from "@server/utils/passport";
 import { robotsResponse } from "@server/utils/robots";
+import { isInvalidAppPath } from "@server/utils/url";
 import apexRedirect from "../middlewares/apexRedirect";
 import { renderApp, renderShare } from "./app";
 import { renderEmbed } from "./embeds";
@@ -38,7 +39,7 @@ router.use(["/images/*", "/email/*", "/fonts/*"], async (ctx, next) => {
         },
       });
     } catch (err) {
-      if (err.status !== 404) {
+      if (!(err instanceof Error && "status" in err && err.status === 404)) {
         throw err;
       }
     }
@@ -52,7 +53,8 @@ router.use(["/images/*", "/email/*", "/fonts/*"], async (ctx, next) => {
 router.use(
   ["/share/:shareId", "/share/:shareId/doc/:documentSlug", "/share/:shareId/*"],
   (ctx) => {
-    ctx.redirect(ctx.path.replace(/^\/share/, "/s"));
+    const redirectPath = ctx.path.replace(/^\/share/, "/s");
+    ctx.redirect(redirectPath + ctx.request.URL.search);
     ctx.status = 301;
   }
 );
@@ -76,7 +78,7 @@ if (env.isProduction) {
         },
       });
     } catch (err) {
-      if (err.status === 404) {
+      if (err instanceof Error && "status" in err && err.status === 404) {
         // Serve a bad request instead of not found if the file doesn't exist
         // This prevents CDN's from caching the response, allowing them to continue
         // serving old file versions
@@ -122,7 +124,7 @@ router.get(
     const origin = env.isCloudHosted
       ? ctx.request.URL.origin
       : new URL(env.URL).origin;
-    const team = await getTeamFromContext(ctx, { includeStateCookie: false });
+    const team = await getTeamFromContext(ctx, { includeOAuthState: false });
     const mcpEnabled = team?.getPreference(TeamPreference.MCP) ?? true;
 
     ctx.body = {
@@ -149,7 +151,7 @@ router.get(
     "/.well-known/oauth-protected-resource/mcp",
   ],
   async (ctx) => {
-    const team = await getTeamFromContext(ctx, { includeStateCookie: false });
+    const team = await getTeamFromContext(ctx, { includeOAuthState: false });
     const mcpEnabled = team?.getPreference(TeamPreference.MCP) ?? true;
 
     if (!mcpEnabled) {
@@ -171,6 +173,12 @@ router.get(
     };
   }
 );
+
+// MCP clients sometimes probe the origin for a legacy HTTP+SSE endpoint. The
+// application shell is not a valid response to that probe, so answer with a 404.
+router.get("/sse", (ctx) => {
+  ctx.status = 404;
+});
 
 router.get("/robots.txt", (ctx) => {
   ctx.body = robotsResponse();
@@ -216,6 +224,11 @@ router.get("/sitemap.xml", async (ctx) => {
 
 // catch all for application
 router.get("*", async (ctx, next) => {
+  if (isInvalidAppPath(ctx.path)) {
+    ctx.status = 404;
+    return;
+  }
+
   if (ctx.state?.rootShare) {
     // Only allow root path for root share domains, return 404 for other paths.
     // Valid paths like /doc/:documentSlug and /sitemap.xml are handled above.
@@ -237,34 +250,20 @@ router.get("*", async (ctx, next) => {
       }
     }
 
-    // Redirect all requests to custom domain if one is set
-    else if (team?.domain) {
-      if (team.domain !== ctx.hostname) {
-        ctx.redirect(ctx.href.replace(ctx.hostname, team.domain));
-        return;
-      }
-    }
-
-    // Redirect if subdomain is not the current team's subdomain
-    else if (team?.subdomain) {
-      const { teamSubdomain } = parseDomain(ctx.href);
-      if (team?.subdomain !== teamSubdomain) {
-        ctx.redirect(
-          ctx.href.replace(`//${teamSubdomain}.`, `//${team.subdomain}.`)
-        );
-        return;
-      }
+    // Redirect to the team's canonical url, taking into account custom domains
+    // and hosted subdomains, if the request arrived on a different host.
+    else if (team && !team.isTeamUrl(ctx.href)) {
+      const url = new URL(team.url);
+      url.pathname = ctx.path;
+      url.search = ctx.search;
+      ctx.redirect(url.toString());
+      return;
     }
   }
 
-  const analytics = team
-    ? await Integration.findAll({
-        where: {
-          teamId: team.id,
-          type: IntegrationType.Analytics,
-        },
-      })
-    : [];
+  const analytics = await Integration.findAnalyticsIntegrationsForTeam(
+    team?.id
+  );
 
   const publicBranding =
     team?.getPreference(TeamPreference.PublicBranding) ?? false;

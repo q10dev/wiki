@@ -3,7 +3,12 @@ import sharedEnv from "@shared/env";
 import { TeamPreference } from "@shared/types";
 import env from "@server/env";
 import { OAuthClient } from "@server/models";
-import { buildTeam } from "@server/test/factories";
+import {
+  buildApiKey,
+  buildOAuthClient,
+  buildTeam,
+  buildUser,
+} from "@server/test/factories";
 import { getTestServer } from "@server/test/support";
 
 const server = getTestServer();
@@ -94,7 +99,7 @@ describe("#oauth.register", () => {
     expect(body.logo_uri).toEqual("https://example.com/logo.png");
   });
 
-  it("should reject missing client_name", async () => {
+  it("should accept registration without client_name", async () => {
     const res = await server.post("/oauth/register", {
       body: {
         redirect_uris: ["https://example.com/callback"],
@@ -104,7 +109,10 @@ describe("#oauth.register", () => {
       },
     });
 
-    expect(res.status).toEqual(400);
+    expect(res.status).toEqual(201);
+    const body = await res.json();
+    expect(body.client_id).toBeTruthy();
+    expect(body.client_name).toEqual("Untitled application");
   });
 
   it("should reject missing redirect_uris", async () => {
@@ -514,5 +522,94 @@ describe("GET /.well-known/oauth-protected-resource", () => {
     } finally {
       env.URL = sharedEnv.URL = originalUrl;
     }
+  });
+});
+
+describe("POST /oauth/authorize", () => {
+  it("should not accept an API key in place of a session", async () => {
+    const user = await buildUser();
+    const client = await buildOAuthClient({ teamId: user.teamId });
+    const apiKey = await buildApiKey({ userId: user.id, scope: ["write"] });
+
+    const res = await server.post("/oauth/authorize", {
+      redirect: "manual",
+      headers: { authorization: `Bearer ${apiKey.value}` },
+      body: {
+        client_id: client.clientId,
+        response_type: "code",
+        redirect_uri: client.redirectUris[0],
+        state: "state",
+        scope: "read write",
+      },
+    });
+
+    expect(res.status).toEqual(403);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("should issue an authorization code for a session", async () => {
+    const user = await buildUser();
+    const client = await buildOAuthClient({ teamId: user.teamId });
+
+    const res = await server.post("/oauth/authorize", user, {
+      redirect: "manual",
+      body: {
+        client_id: client.clientId,
+        response_type: "code",
+        redirect_uri: client.redirectUris[0],
+        state: "state",
+        scope: "read",
+      },
+    });
+
+    expect(res.status).toEqual(302);
+    expect(res.headers.get("location")).toContain("code=");
+  });
+
+  it("should not issue an authorization code to a dynamically registered client when MCP is disabled", async () => {
+    const team = await buildTeam({
+      preferences: { [TeamPreference.MCP]: false },
+    });
+    const user = await buildUser({ teamId: team.id });
+    const client = await buildOAuthClient({
+      teamId: team.id,
+      createdById: null,
+    });
+
+    const res = await server.post("/oauth/authorize", user, {
+      redirect: "manual",
+      body: {
+        client_id: client.clientId,
+        response_type: "code",
+        redirect_uri: client.redirectUris[0],
+        state: "state",
+        scope: "read",
+      },
+    });
+
+    expect(res.status).toEqual(403);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("should issue an authorization code to a user created client when MCP is disabled", async () => {
+    const team = await buildTeam({
+      preferences: { [TeamPreference.MCP]: false },
+    });
+    const user = await buildUser({ teamId: team.id });
+    const client = await buildOAuthClient({ teamId: team.id });
+
+    const res = await server.post("/oauth/authorize", user, {
+      redirect: "manual",
+      body: {
+        client_id: client.clientId,
+        response_type: "code",
+        redirect_uri: client.redirectUris[0],
+        state: "state",
+        scope: "read",
+      },
+    });
+
+    expect(res.status).toEqual(302);
+    expect(res.headers.get("location")).toContain("code=");
   });
 });

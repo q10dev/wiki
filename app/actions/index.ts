@@ -15,10 +15,24 @@ import type {
 } from "~/types";
 import Analytics from "~/utils/Analytics";
 import history from "~/utils/history";
-import type { Action as KbarAction } from "kbar";
+import type { ActionImpl, Action as KbarAction } from "kbar";
 
-export function resolve<T>(value: any, context: ActionContext): T {
-  return typeof value === "function" ? value(context) : value;
+/** A command bar action, with the additional properties that Outline renders. */
+export type CommandBarAction = KbarAction & {
+  badge?: React.ReactNode;
+};
+
+/** A registered command bar action, as handed back by the command bar. */
+export type CommandBarActionImpl = ActionImpl & {
+  badge?: React.ReactNode;
+};
+
+export function resolve<T>(value: unknown, context: ActionContext): T {
+  return (
+    typeof value === "function"
+      ? (value as (context: ActionContext) => T)(context)
+      : value
+  ) as T;
 }
 
 export const ActionSeparator: TActionSeparator = {
@@ -107,6 +121,42 @@ export function createRootMenuAction(
   };
 }
 
+/**
+ * Determines whether any of the given actions are visible in the context,
+ * without resolving the remainder of the menu items.
+ *
+ * @param actions - the actions to check.
+ * @param context - the context to resolve visibility against.
+ * @returns true if at least one action is visible.
+ */
+export function hasVisibleActions(
+  actions: (ActionVariant | ActionGroup | TActionSeparator)[],
+  context: ActionContext
+): boolean {
+  return actions.some((action) => {
+    switch (action.type) {
+      case "action": {
+        if (resolve<boolean>(action.visible, context) === false) {
+          return false;
+        }
+        if (action.variant === "action_with_children") {
+          const children = resolve<
+            (ActionVariant | ActionGroup | TActionSeparator)[]
+          >(action.children, context);
+          return hasVisibleActions(children, context);
+        }
+        return true;
+      }
+
+      case "action_group":
+        return hasVisibleActions(action.actions, context);
+
+      case "action_separator":
+        return false;
+    }
+  });
+}
+
 export function actionToMenuItem(
   action: ActionVariant | ActionGroup | TActionSeparator,
   context: ActionContext
@@ -116,6 +166,7 @@ export function actionToMenuItem(
       const title = resolve<string>(action.name, context);
       const visible = resolve<boolean>(action.visible, context) ?? true;
       const disabled = resolve<boolean>(action.disabled, context);
+      const shortcut = resolve<string[] | undefined>(action.shortcut, context);
       const icon =
         !!action.icon && action.iconInContextMenu !== false
           ? resolve<React.ReactNode>(action.icon, context)
@@ -132,6 +183,7 @@ export function actionToMenuItem(
             tooltip: resolve<React.ReactChild>(action.tooltip, context),
             selected: resolve<boolean>(action.selected, context),
             dangerous: action.dangerous,
+            shortcut,
             onClick: () => performAction(action, context),
           };
 
@@ -143,6 +195,7 @@ export function actionToMenuItem(
             icon,
             visible,
             disabled,
+            shortcut,
             to,
           };
         }
@@ -154,6 +207,7 @@ export function actionToMenuItem(
             icon,
             visible,
             disabled,
+            shortcut,
             href: action.target
               ? { url: action.url, target: action.target }
               : action.url,
@@ -201,22 +255,36 @@ export function actionToMenuItem(
 export function actionToKBar(
   action: ActionVariant,
   context: ActionContext
-): KbarAction[] {
+): CommandBarAction[] {
   const visible = resolve<boolean>(action.visible, context);
   if (visible === false) {
     return [];
   }
 
   const name = resolve<string>(action.name, context);
+  const shortcut = resolve<string[] | undefined>(action.shortcut, context);
   const icon = resolve<React.ReactElement>(action.icon, context);
+  const badge = resolve<React.ReactNode>(action.badge, context);
   const section = resolve<string>(action.section, context);
+  const subtitle = resolve<string>(action.description, context);
 
-  const sectionPriority =
-    typeof action.section !== "string" && "priority" in action.section
-      ? ((action.section.priority as number) ?? 0)
-      : 0;
+  // Sections are passed to the command bar as objects so that their declared
+  // priority orders the sections themselves – given a bare string it would
+  // instead order them by the match score of whichever result happens to come
+  // first, which lets a section with an exact keyword match jump to the top.
+  // The command bar falls back to that same match score when the priority is
+  // falsy, so the offset keeps an undeclared priority of zero out of the way
+  // while preserving the relative order of the declared values.
+  const sectionWithPriority = {
+    name: section,
+    priority:
+      sectionPriorityOffset +
+      (typeof action.section !== "string" && "priority" in action.section
+        ? ((action.section.priority as number) ?? 0)
+        : 0),
+  };
 
-  const priority = (1 + (action.priority ?? 0)) * (1 + (sectionPriority ?? 0));
+  const priority = 1 + (action.priority ?? 0);
 
   switch (action.variant) {
     case "action":
@@ -226,10 +294,12 @@ export function actionToKBar(
         {
           id: action.id,
           name,
-          section,
+          section: sectionWithPriority,
           keywords: action.keywords,
-          shortcut: action.shortcut,
+          shortcut,
+          subtitle,
           icon,
+          badge,
           priority,
           perform: () => performAction(action, context),
         },
@@ -250,10 +320,12 @@ export function actionToKBar(
         {
           id: action.id,
           name,
-          section,
+          section: sectionWithPriority,
           keywords: action.keywords,
-          shortcut: action.shortcut,
+          shortcut,
           icon,
+          badge,
+          subtitle,
           priority,
         },
         ...children.map((child) => ({
@@ -289,6 +361,13 @@ export async function performAction(
 
   return result;
 }
+
+/**
+ * Added to every section priority handed to the command bar, so that a section
+ * which declares no priority is still ordered by its priority rather than by
+ * match score. Must be larger than the largest declared priority in magnitude.
+ */
+const sectionPriorityOffset = 10;
 
 function hasVisibleItems(items: MenuItem[]) {
   const applicableTypes = ["button", "link", "route", "group", "submenu"];

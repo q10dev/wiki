@@ -1,4 +1,4 @@
-import isArrayLike from "lodash/isArrayLike";
+import { isArrayLike } from "es-toolkit/compat";
 import sanitize from "sanitize-filename";
 import type { Primitive } from "utility-types";
 import validator from "validator";
@@ -12,6 +12,8 @@ import parseMentionUrl from "@shared/utils/parseMentionUrl";
 import { isUrl } from "@shared/utils/urls";
 import { ParamRequiredError, ValidationError } from "./errors";
 import { Buckets } from "./models/helpers/AttachmentHelper";
+
+export { isISO8601Duration } from "@shared/utils/date";
 
 type IncomingValue = Primitive | string[];
 
@@ -55,7 +57,11 @@ export function assertKeysIn(
   Object.keys(obj).forEach((key) => assertIn(key, Object.values(type)));
 }
 
-export const assertSort = (value: string, model: any, message?: string) => {
+export const assertSort = (
+  value: string,
+  model: { rawAttributes: Record<string, unknown> },
+  message?: string
+) => {
   if (!Object.keys(model.rawAttributes).includes(value)) {
     throw ValidationError(
       message ?? `${String(value)} is not a valid sort field`
@@ -215,6 +221,16 @@ export class ValidateKey {
       .concat(`/${sanitize(filename.replace(/#/g, ""))}`);
   };
 
+  /**
+   * Sanitizes a string for use as a single segment of a key, removing any
+   * characters that would allow it to change the location the key points to.
+   *
+   * @param name the string to sanitize.
+   * @returns the sanitized segment.
+   */
+  public static sanitizeSegment = (name: string) =>
+    sanitize(name.replace(/#/g, ""));
+
   public static message = "Must be of the form <bucket>/<uuid>/<uuid>/<name>?";
 }
 
@@ -251,9 +267,10 @@ export class ValidateURL {
 
       const { id, mentionType, modelId } = parseMentionUrl(url);
       return (
-        id &&
-        isUUID(id) &&
+        (!id || isUUID(id)) &&
+        !!mentionType &&
         Object.values(MentionType).includes(mentionType as MentionType) &&
+        !!modelId &&
         isUUID(modelId)
       );
     } catch (_err) {

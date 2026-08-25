@@ -14,6 +14,7 @@ allow(User, "updateTemplate", Team, (actor, team) =>
 allow(User, "read", Template, (actor, template) =>
   and(
     isTeamModel(actor, template),
+    or(!template?.isDraft, template?.createdById === actor.id),
     or(
       and(!!template?.isWorkspaceTemplate, can(actor, "read", actor.team)),
       can(actor, "readDocument", template?.collection)
@@ -37,7 +38,7 @@ allow(User, ["update", "move", "duplicate"], Template, (actor, template) =>
         !!template?.isWorkspaceTemplate,
         can(actor, "updateTemplate", actor.team)
       ),
-      can(actor, "update", template?.collection)
+      can(actor, "manageTemplate", template?.collection)
     )
   )
 );
@@ -61,7 +62,7 @@ allow(User, "restore", Template, (actor, template) =>
         !!template?.isWorkspaceTemplate,
         can(actor, "updateTemplate", actor.team)
       ),
-      can(actor, "update", template?.collection)
+      can(actor, "manageTemplate", template?.collection)
     )
   )
 );

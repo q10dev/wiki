@@ -13,6 +13,14 @@ export enum Scope {
   Create = "create",
 }
 
+/** The method used to authenticate a request. */
+export enum AuthenticationType {
+  API = "api",
+  APP = "app",
+  MCP = "mcp",
+  OAUTH = "oauth",
+}
+
 export type DateFilter = "day" | "week" | "month" | "year";
 
 export enum StatusFilter {
@@ -32,6 +40,13 @@ export enum DirectionFilter {
   DESC = "DESC",
 }
 
+/** Model types that support search indexing. */
+export enum SearchableModel {
+  Document = "document",
+  Collection = "collection",
+  Comment = "comment",
+}
+
 export enum CollectionStatusFilter {
   Archived = "archived",
 }
@@ -49,6 +64,7 @@ export enum Client {
 export enum ExportContentType {
   Markdown = "text/markdown",
   Html = "text/html",
+  TextBundle = "application/x-textbundle",
   Pdf = "application/pdf",
 }
 
@@ -56,6 +72,7 @@ export enum FileOperationFormat {
   JSON = "json",
   MarkdownZip = "outline-markdown",
   HTMLZip = "html",
+  TextBundleZip = "textbundle",
   PDF = "pdf",
   Notion = "notion",
 }
@@ -90,6 +107,21 @@ export enum ImportTaskState {
   Canceled = "canceled",
 }
 
+/**
+ * Classifies the work an `ImportTask` row represents. Set when the task is
+ * created and used by `APIImportTask` to dispatch to the right handler.
+ *
+ * - `Bootstrap` runs once per import on a worker that owns the source
+ *   artifact (e.g. extracts a zip, discovers structure, schedules child
+ *   tasks). Subclasses without a bootstrap step never produce these.
+ * - `Page` is the per-document work that the bootstrap (or `ImportsProcessor`
+ *   for sources without a bootstrap, like Notion) fans out into.
+ */
+export enum ImportTaskPhase {
+  Bootstrap = "bootstrap",
+  Page = "page",
+}
+
 export enum MentionType {
   User = "user",
   Document = "document",
@@ -99,10 +131,14 @@ export enum MentionType {
   PullRequest = "pull_request",
   Project = "project",
   URL = "url",
+  Date = "date",
 }
 
 export type PublicEnv = {
+  /** ID of the share mounted at the root of a custom domain, if any. */
   ROOT_SHARE_ID?: string;
+  /** Whether the page is a publicly shared view. */
+  isShare?: boolean;
   analytics: {
     service: IntegrationService;
     settings: IntegrationSettings<IntegrationType.Analytics>;
@@ -144,15 +180,24 @@ export enum IntegrationService {
   Linear = "linear",
   Figma = "figma",
   Notion = "notion",
+  Markdown = "markdown",
+  Slab = "slab",
+  JSON = "json",
 }
 
 export type ImportableIntegrationService = Extract<
   IntegrationService,
-  IntegrationService.Notion
+  | IntegrationService.Notion
+  | IntegrationService.Markdown
+  | IntegrationService.Slab
+  | IntegrationService.JSON
 >;
 
 export const ImportableIntegrationService = {
   Notion: IntegrationService.Notion,
+  Markdown: IntegrationService.Markdown,
+  Slab: IntegrationService.Slab,
+  JSON: IntegrationService.JSON,
 } as const;
 
 export type IssueTrackerIntegrationService = Extract<
@@ -294,8 +339,21 @@ export type IntegrationSettings<T> = T extends IntegrationType.Embed
                     };
                   }
                 | { serviceTeamId: string }
-                | { measurementId: string }
+                | {
+                    measurementId: string;
+                    instanceUrl?: string;
+                    scriptName?: string;
+                  }
                 | undefined;
+
+export enum SidebarSection {
+  /** The starred documents section. */
+  Starred = "starred",
+  /** The documents shared with the user directly or via groups. */
+  SharedWithMe = "shared",
+  /** The collections section. */
+  Collections = "collections",
+}
 
 export enum UserPreference {
   /** Whether reopening the app should redirect to the last viewed document. */
@@ -310,11 +368,37 @@ export enum UserPreference {
   FullWidthDocuments = "fullWidthDocuments",
   /** Whether to sort the comments by their order in the document. */
   SortCommentsByOrderInDocument = "sortCommentsByOrderInDocument",
+  /** Whether to display a comment indicator in the gutter beside commented lines. */
+  CommentsInGutter = "commentsInGutter",
   /** Whether smart text replacements should be enabled. */
   EnableSmartText = "enableSmartText",
+  /** Whether live word, character, and paragraph counts are shown in documents. */
+  ShowDocumentStats = "showDocumentStats",
   /** The style of notification badge to display. */
   NotificationBadge = "notificationBadge",
+  /** The display order of the reorderable sections in the sidebar. */
+  SidebarSectionOrder = "sidebarSectionOrder",
 }
+
+export enum HeadingPrefixStyle {
+  /** Headings are displayed without a prefix. */
+  None = "none",
+  /** Numeric prefixes, for example: 1, 1.1, 1.1.1 */
+  Numeric = "numeric",
+  /** Alphanumeric prefixes, for example: 1, 1.a, 1.a.i */
+  Alphanumeric = "alphanumeric",
+  /** Outline-style prefixes, for example: I, I.A, I.A.1 */
+  Outline = "outline",
+}
+
+export enum DocumentPreference {
+  /** The style of prefix displayed before headings in the document. */
+  HeadingPrefix = "headingPrefix",
+}
+
+export type DocumentPreferences = {
+  [DocumentPreference.HeadingPrefix]?: HeadingPrefixStyle;
+};
 
 export enum NotificationBadgeType {
   /** Do not show a notification badge. */
@@ -332,8 +416,11 @@ export type UserPreferences = {
   [UserPreference.SeamlessEdit]?: boolean;
   [UserPreference.FullWidthDocuments]?: boolean;
   [UserPreference.SortCommentsByOrderInDocument]?: boolean;
+  [UserPreference.CommentsInGutter]?: boolean;
   [UserPreference.EnableSmartText]?: boolean;
+  [UserPreference.ShowDocumentStats]?: boolean;
   [UserPreference.NotificationBadge]?: NotificationBadgeType;
+  [UserPreference.SidebarSectionOrder]?: SidebarSection[];
 };
 
 export type SourceMetadata = {
@@ -351,6 +438,10 @@ export type SourceMetadata = {
   trial?: boolean;
   /** The ID of the original document when this document was duplicated. */
   originalDocumentId?: string;
+  /** The ID of the original collection when this collection was duplicated. */
+  originalCollectionId?: string;
+  /** The type of authentication used to make the change. */
+  authType?: AuthenticationType;
 };
 
 export type CustomTheme = {
@@ -376,6 +467,15 @@ export enum EmailDisplay {
   Everyone = "everyone",
 }
 
+export enum CommentingAccess {
+  /** No one can comment. */
+  None = "none",
+  /** Only members can comment. */
+  Members = "members",
+  /** Members and guests can comment. */
+  Everyone = "everyone",
+}
+
 export enum TeamPreference {
   /** Whether documents have a separate edit mode instead of always editing. */
   SeamlessEdit = "seamlessEdit",
@@ -391,7 +491,7 @@ export enum TeamPreference {
   MembersCanDeleteAccount = "membersCanDeleteAccount",
   /** Whether notification emails include document and comment content. */
   PreviewsInEmails = "previewsInEmails",
-  /** Whether users can comment on documents. */
+  /** Who can comment on documents. */
   Commenting = "commenting",
   /** The custom theme for the team. */
   CustomTheme = "customTheme",
@@ -415,7 +515,7 @@ export type TeamPreferences = {
   [TeamPreference.MembersCanCreateApiKey]?: boolean;
   [TeamPreference.MembersCanDeleteAccount]?: boolean;
   [TeamPreference.PreviewsInEmails]?: boolean;
-  [TeamPreference.Commenting]?: boolean;
+  [TeamPreference.Commenting]?: CommentingAccess;
   [TeamPreference.CustomTheme]?: Partial<CustomTheme>;
   [TeamPreference.TocPosition]?: TOCPosition;
   [TeamPreference.PreventDocumentEmbedding]?: boolean;
@@ -473,6 +573,7 @@ export enum NotificationEventType {
   Onboarding = "emails.onboarding",
   Features = "emails.features",
   ExportCompleted = "emails.export_completed",
+  RequestDocumentAccess = "access_requests.create",
 }
 
 export enum NotificationChannelType {
@@ -512,6 +613,7 @@ export const NotificationEventDefaults: Record<NotificationEventType, boolean> =
     [NotificationEventType.ExportCompleted]: true,
     [NotificationEventType.AddUserToDocument]: true,
     [NotificationEventType.AddUserToCollection]: true,
+    [NotificationEventType.RequestDocumentAccess]: true,
   };
 
 export enum UnfurlResourceType {
@@ -584,7 +686,7 @@ export type UnfurlResponse = {
     /** Document summary */
     summary: string;
     /** Viewer's last activity on this document */
-    lastActivityByViewer: string;
+    lastActivityByViewer?: string;
   };
   [UnfurlResourceType.Issue]: {
     /** The resource type */
@@ -666,6 +768,8 @@ export type UnfurlResponse = {
 export enum QueryNotices {
   UnsubscribeDocument = "unsubscribe-document",
   UnsubscribeCollection = "unsubscribe-collection",
+  Subscribed = "subscribed",
+  Unsubscribed = "unsubscribed",
 }
 
 export type JSONValue =
@@ -679,15 +783,17 @@ export type JSONValue =
 
 export type JSONObject = { [x: string]: JSONValue };
 
+export type ProsemirrorMark = {
+  type: string;
+  attrs?: JSONObject;
+};
+
 export type ProsemirrorData = {
   type: string;
   content?: ProsemirrorData[];
   text?: string;
   attrs?: JSONObject;
-  marks?: {
-    type: string;
-    attrs?: JSONObject;
-  }[];
+  marks?: ProsemirrorMark[];
 };
 
 export type ProsemirrorDoc = {
@@ -709,6 +815,8 @@ export enum TextEditMode {
   Append = "append",
   /** Prepend new content to the beginning of the document. */
   Prepend = "prepend",
+  /** Patch specific content within the document by finding and replacing text. */
+  Patch = "patch",
 }
 
 export enum EmojiCategory {

@@ -2,6 +2,7 @@
 import { lighten, transparentize } from "polished";
 import type { DefaultTheme } from "styled-components";
 import styled, { css, keyframes } from "styled-components";
+import { HEADER_HEIGHT } from "../../constants";
 import { breakpoints, hover } from "../../styles";
 import { EditorStyleHelper } from "../styles/EditorStyleHelper";
 import { videoStyle } from "./Video";
@@ -82,8 +83,7 @@ const mathStyle = (props: Props) => css`
 
     .ProseMirror-focused {
       border-radius: 2px;
-      outline: 2px solid
-        ${props.readOnly ? "transparent" : props.theme.selected};
+      outline: none;
     }
   }
 
@@ -404,7 +404,16 @@ const diffStyle = (props: Props) => css`
   }
 `;
 
-const findAndReplaceStyle = () => css`
+const findAndReplaceStyle = (props: Props) => css`
+  & ::highlight(search-results) {
+    background-color: rgba(255, 213, 0, 0.25);
+  }
+
+  & ::highlight(search-results-current) {
+    background-color: rgba(255, 213, 0, 0.75);
+    color: ${props.theme.textHighlightForeground};
+  }
+
   .find-result:not(:has(.mention)),
   .find-result .mention {
     background: rgba(255, 213, 0, 0.25);
@@ -412,9 +421,9 @@ const findAndReplaceStyle = () => css`
 
   .find-result.current-result:not(:has(.mention)),
   .find-result.current-result .mention {
-      background: rgba(255, 213, 0, 0.75);
-      animation: ${pulse("rgba(255, 213, 0, 0.75)")} 150ms 1;
-    }
+    background: rgba(255, 213, 0, 0.75);
+    animation: ${pulse("rgba(255, 213, 0, 0.75)")} 150ms 1;
+    color: ${props.theme.textHighlightForeground};
   }
 `;
 
@@ -427,7 +436,7 @@ const emailStyle = (props: Props) => css`
     border-radius: 8px;
     padding: 6px 8px;
   }
-  .image > img {
+  .image:not(.image-icon) > img {
     width: auto;
     height: auto;
   }
@@ -551,14 +560,51 @@ width: 100%;
   gap: 4px;
   vertical-align: bottom;
 
+  /* Long labels are truncated so a mention never wraps onto a second line. */
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* Text sets white-space: normal, so nowrap cannot simply be inherited. */
+    white-space: nowrap;
+  }
+
+  /* Only the label truncates; icons and trailing identifiers stay whole. */
+  &::before,
+  svg,
+  img,
+  span ~ span {
+    flex-shrink: 0;
+  }
+
   &:${hover} {
     cursor: default;
     background: ${props.theme.mentionHoverBackground};
   }
 
+  /* Date mentions only open the picker when editable, so no hover affordance
+     in read-only mode. */
+  ${
+    props.readOnly
+      ? `&[data-type="date"]:${hover} {
+    background: ${props.theme.mentionBackground};
+  }`
+      : ""
+  }
+
   &[data-type="user"],
   &[data-type="group"] {
     gap: 0;
+  }
+
+  /* Date mentions are plain text, so they inherit the surrounding font weight
+     (e.g. bold when placed inside a heading). */
+  &[data-type="date"] {
+    font-weight: inherit;
   }
 
   &.mention-user::before {
@@ -568,6 +614,13 @@ width: 100%;
   &.mention-document::before {
     content: "+";
   }
+}
+
+.${EditorStyleHelper.suggestionTrigger} {
+  background: ${props.theme.mentionBackground};
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px ${props.theme.mentionBackground};
+  box-decoration-break: clone;
 }
 
 > div {
@@ -587,7 +640,7 @@ width: 100%;
   padding: ${props.editorStyle?.padding ?? "initial"};
   margin: ${props.editorStyle?.margin ?? "initial"};
 
-  & > .ProseMirror-yjs-cursor {
+  & > .${EditorStyleHelper.multiplayerCursor} {
     display: none;
   }
 
@@ -624,7 +677,7 @@ width: 100%;
       margin-top: 0.25em;
     }
 
-    &:not(.placeholder) {
+    &:not(.placeholder):not([data-heading-prefix]) {
       &::before {
         display: none;
         font-family: ${props.theme.fontFamilyMono};
@@ -633,7 +686,6 @@ width: 100%;
         font-weight: 500;
         line-height: 0;
         margin-left: -24px;
-        transition: opacity 150ms ease-in-out;
         opacity: 0;
         width: 24px;
       }
@@ -644,10 +696,13 @@ width: 100%;
       }
     }
 
-    &:hover,
-    &:focus-within {
-      .heading-actions {
-        opacity: 1;
+    &:hover {
+      .heading-anchor {
+        opacity: 0.75;
+
+        &:hover {
+          opacity: 1;
+        }
       }
     }
   }
@@ -661,11 +716,18 @@ width: 100%;
   h5 { font-size: var(--font-size-h5); }
   h6 { font-size: var(--font-size-h6); }
 
-  .ProseMirror-yjs-selection {
+  [data-heading-prefix]::before {
+    content: attr(data-heading-prefix);
+    color: ${props.theme.text};
+    opacity: 0.75;
+    margin-inline-end: 0.25em;
+  }
+
+  .${EditorStyleHelper.multiplayerSelection} {
     transition: background-color 500ms ease-in-out;
   }
 
-  .ProseMirror-yjs-cursor {
+  .${EditorStyleHelper.multiplayerCursor} {
     position: relative;
     margin-left: -1px;
     margin-right: -1px;
@@ -673,6 +735,7 @@ width: 100%;
     border-right: 1px solid black;
     height: 1em;
     word-break: normal;
+    user-select: none;
 
     &::after {
       content: "";
@@ -710,7 +773,7 @@ width: 100%;
   }
 }
 
-&.show-cursor-names .ProseMirror-yjs-cursor > div {
+&.show-cursor-names .${EditorStyleHelper.multiplayerCursor} > div {
   opacity: 1;
 }
 
@@ -753,6 +816,19 @@ iframe.embed {
   .ProseMirror-selectednode img {
     pointer-events: initial;
   }
+}
+
+.image .image-wrapper,
+.image .image-wrapper img {
+  width: var(--image-width, auto);
+}
+
+/* Inside auto-layout table cells the plain pixel width would expand the cell  */
+td .image .image-wrapper,
+th .image .image-wrapper,
+td .image .image-wrapper img,
+th .image .image-wrapper img {
+  width: min(var(--image-width), 100%);
 }
 
 .image.placeholder,
@@ -813,34 +889,20 @@ iframe.embed {
   }
 }
 
-.pdf {
-  position: relative;
-  width: max-content;
-  height: max-content;
-  margin-right: auto;
-  margin-left: auto;
-  max-width: 100%;
-  clear: both;
-  z-index: 1;
-  transition-property: width, height;
-  transition-duration: 80ms;
-  transition-timing-function: ease-in-out;
-
-  embed {
-    display: block;
-    max-width: 100%;
-    contain: strict,
-    content-visibility: auto,
-    backface-visibility: hidden,
-    transition-property: width, height;
-    transition-duration: 80ms;
-    transition-timing-function: ease-in-out;
-  }
-}
-
 .image-replacement-uploading {
   img {
     opacity: 0.5;
+  }
+}
+
+.image-icon {
+  display: inline-block;
+  text-align: initial;
+  clear: initial;
+  vertical-align: text-bottom;
+
+  .image-wrapper {
+    margin: 0;
   }
 }
 
@@ -959,6 +1021,15 @@ img.ProseMirror-separator {
   display: block;
 }
 
+.component-image:has(.image-icon) {
+  display: inline-block;
+  vertical-align: text-bottom;
+}
+
+.image-commented .image-wrapper {
+  outline: ${props.theme.commentedImageOutlineLight} solid 2px;
+}
+
 // Removes forced paragraph spaces below images, this is needed to images
 // being inline nodes that are displayed like blocks
 .component-image + img.ProseMirror-separator,
@@ -1010,7 +1081,7 @@ img.ProseMirror-separator {
 
 .${EditorStyleHelper.headingPositionAnchor}:first-child,
 // Edge case where multiplayer cursor is between start of cell and heading
-.${EditorStyleHelper.headingPositionAnchor}:first-child + .ProseMirror-yjs-cursor,
+.${EditorStyleHelper.headingPositionAnchor}:first-child + .${EditorStyleHelper.multiplayerCursor},
 // Edge case where table grips are between start of cell and heading
 .${EditorStyleHelper.headingPositionAnchor}:first-child + [role=button] + [role=button] {
   & + h1,
@@ -1032,22 +1103,22 @@ a:first-child {
   }
 }
 
-h1:not(.placeholder)::before {
+h1:not(.placeholder):not([data-heading-prefix])::before {
   content: "H1";
 }
-h2:not(.placeholder)::before {
+h2:not(.placeholder):not([data-heading-prefix])::before {
   content: "H2";
 }
-h3:not(.placeholder)::before {
+h3:not(.placeholder):not([data-heading-prefix])::before {
   content: "H3";
 }
-h4:not(.placeholder)::before {
+h4:not(.placeholder):not([data-heading-prefix])::before {
   content: "H4";
 }
-h5:not(.placeholder)::before {
+h5:not(.placeholder):not([data-heading-prefix])::before {
   content: "H5";
 }
-h6:not(.placeholder)::before {
+h6:not(.placeholder):not([data-heading-prefix])::before {
   content: "H6";
 }
 
@@ -1059,8 +1130,11 @@ h6:not(.placeholder)::before {
   h4,
   h5,
   h6 {
-    &:not(.placeholder)::before {
+    &:not(.placeholder):not([data-heading-prefix])::before {
       opacity: 1;
+    }
+    &:hover:not(.placeholder):not([data-heading-prefix])::before {
+      opacity: 0;
     }
   }
 }
@@ -1112,85 +1186,37 @@ h6:not(.placeholder)::before {
   top: -0.1em;
 }
 
-.heading-anchor,
-.heading-fold {
-  display: inline-block;
+.heading-anchor {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  margin-left: -26px;
+  width: 26px;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  user-select: none;
   color: ${props.theme.text};
-  opacity: .75;
   cursor: var(--pointer);
   background: none;
   outline: none;
   border: 0;
-  margin: 0;
   padding: 0;
-  text-align: start;
   font-weight: 500;
   font-family: ${props.theme.fontFamilyMono};
-  font-size: 14px;
-  line-height: 0;
-  width: 12px;
-  height: 24px;
+  font-size: 16px;
+  line-height: 1;
+  box-sizing: border-box;
 
-  &:focus,
   &:hover {
     opacity: 1;
   }
-}
-
-.ProseMirror.exported {
-  .heading-fold {
-    display: none;
-  }
-}
-
-.heading-anchor {
-  box-sizing: border-box;
-}
-
-.heading-actions {
-  opacity: 0;
-  user-select: none;
-  background: ${props.theme.background};
-  margin-left: -26px;
-  flex-direction: row;
-  display: none;
-  position: absolute;
-  left: 0;
-  top: calc(.5em - 6px);
-  width: 26px;
-  height: 24px;
 
   &:dir(rtl) {
     margin-left: 0;
     margin-right: -26px;
-  }
-
-  &.collapsed {
-    opacity: 1;
-  }
-
-  &.collapsed .heading-anchor {
-    opacity: 0;
-  }
-
-  &.collapsed .heading-fold {
-    opacity: 1;
-  }
-}
-
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  &:hover {
-    .heading-anchor {
-      opacity: 0.75 !important;
-    }
-    .heading-anchor:hover {
-      opacity: 1 !important;
-    }
   }
 }
 
@@ -1201,31 +1227,12 @@ h6 {
   h4,
   h5,
   h6 {
-    .heading-actions {
+    .heading-anchor {
       display: inline-flex;
     }
-    &:not(.placeholder)::before {
+    &:not(.placeholder):not([data-heading-prefix])::before {
       display: ${props.readOnly ? "none" : "inline-block"};
     }
-  }
-}
-
-.heading-fold {
-  display: inline-block;
-  transform-origin: center;
-  padding: 0;
-
-  &.collapsed {
-    svg {
-      transform: rotate(-90deg);
-      pointer-events: none;
-    }
-    transition-delay: 0.1s;
-    opacity: 1;
-  }
-
-  &:dir(rtl).collapsed svg {
-    transform: rotate(90deg);
   }
 }
 
@@ -1275,9 +1282,10 @@ ${
 `
 }
 
-.notice-block {
+.${EditorStyleHelper.notice} {
   display: flex;
   align-items: center;
+  position: relative;
   background: ${transparentize(0.9, props.theme.noticeInfoBackground)};
   border-left: 4px solid ${props.theme.noticeInfoBackground};
   color: ${props.theme.noticeInfoText};
@@ -1299,13 +1307,13 @@ ${
   }
 }
 
-.notice-block .content {
+.${EditorStyleHelper.notice} .${EditorStyleHelper.noticeContent} {
   flex-grow: 1;
   min-width: 0;
 }
 
-.notice-block {
-  .icon {
+.${EditorStyleHelper.notice} {
+  .${EditorStyleHelper.noticeIcon} {
     width: 24px;
     height: 24px;
     align-self: flex-start;
@@ -1313,18 +1321,18 @@ ${
     color: ${props.theme.noticeInfoBackground};
   }
 
-  &:dir(rtl) .icon {
+  &:dir(rtl) .${EditorStyleHelper.noticeIcon} {
     margin-right: 0;
     margin-left: 4px;
   }
 }
 
-.notice-block.tip {
+.${EditorStyleHelper.notice}.tip {
   background: ${transparentize(0.9, props.theme.noticeTipBackground)};
   border-left: 4px solid ${props.theme.noticeTipBackground};
   color: ${props.theme.noticeTipText};
 
-  .icon {
+  .${EditorStyleHelper.noticeIcon} {
     color: ${props.theme.noticeTipBackground};
   }
 
@@ -1333,12 +1341,12 @@ ${
   }
 }
 
-.notice-block.warning {
+.${EditorStyleHelper.notice}.warning {
   background: ${transparentize(0.9, props.theme.noticeWarningBackground)};
   border-left: 4px solid ${props.theme.noticeWarningBackground};
   color: ${props.theme.noticeWarningText};
 
-  .icon {
+  .${EditorStyleHelper.noticeIcon} {
     color: ${props.theme.noticeWarningBackground};
   }
 
@@ -1347,12 +1355,12 @@ ${
   }
 }
 
-.notice-block.success {
+.${EditorStyleHelper.notice}.success {
   background: ${transparentize(0.9, props.theme.noticeSuccessBackground)};
   border-left: 4px solid ${props.theme.noticeSuccessBackground};
   color: ${props.theme.noticeSuccessText};
 
-  .icon {
+  .${EditorStyleHelper.noticeIcon} {
     color: ${props.theme.noticeSuccessBackground};
   }
 
@@ -1407,8 +1415,23 @@ p {
   min-height: 1.6em;
 }
 
+/* Make top-level paragraphs a positioning context so the comment gutter anchors
+   to them (flush with the content column) */
+.ProseMirror > p {
+  position: relative;
+}
+
 .heading-content {
   position: relative;
+}
+
+/* The heading is taller than the line, so pin the gutter vertically to center
+   its indicators against the text. Horizontal alignment is handled by the
+   gutter's own rule. */
+.heading-content .${EditorStyleHelper.commentGutter} {
+  top: 0;
+  bottom: 0;
+  justify-content: center;
 }
 
 .heading-content a,
@@ -1489,11 +1512,11 @@ ol li {
 .${EditorStyleHelper.checklistWrapper} {
   position: relative;
   margin: 1em 0;
+}
 
-  .${EditorStyleHelper.checklistWrapper} {
-    position: static;
-    margin: 0;
-  }
+li .${EditorStyleHelper.checklistWrapper} {
+  position: static;
+  margin: 0;
 }
 
 .${EditorStyleHelper.checklistCompletedToggle} {
@@ -1529,6 +1552,11 @@ ol li {
 
 .${EditorStyleHelper.checklistWrapper}.${EditorStyleHelper.checklistCompletedHidden} .${EditorStyleHelper.checklistCompletedToggle} {
   opacity: 1;
+}
+
+td .${EditorStyleHelper.checklistCompletedToggle},
+th .${EditorStyleHelper.checklistCompletedToggle} {
+  top: -32px;
 }
 
 .${EditorStyleHelper.checklistWrapper}.${EditorStyleHelper.checklistCompletedHidden} ul.checkbox_list > li.checked {
@@ -1622,13 +1650,16 @@ ul.checkbox_list > li {
 }
 
 ul.checkbox_list {
+  & > li > span[contenteditable="false"] {
+    cursor: text;
+  }
+
   .checkbox {
     display: inline-block;
     cursor: var(--pointer);
     pointer-events: ${
       props.readOnly && !props.readOnlyWriteCheckboxes ? "none" : "initial"
     };
-    opacity: ${props.readOnly && !props.readOnlyWriteCheckboxes ? 0.75 : 1};
     width: 14px;
     height: 14px;
     position: relative;
@@ -1637,23 +1668,65 @@ ul.checkbox_list {
     opacity: .8;
     margin: 0 0.5em 0 0;
 
-    background-image: ${`url("data:image/svg+xml,%3Csvg width='14' height='14' viewBox='0 0 14 14' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M3 0C1.34315 0 0 1.34315 0 3V11C0 12.6569 1.34315 14 3 14H11C12.6569 14 14 12.6569 14 11V3C14 1.34315 12.6569 0 11 0H3ZM3 2C2.44772 2 2 2.44772 2 3V11C2 11.5523 2.44772 12 3 12H11C11.5523 12 12 11.5523 12 11V3C12 2.44772 11.5523 2 11 2H3Z' fill='${props.theme.text.replace(
-      "#",
-      "%23"
-    )}' /%3E%3C/svg%3E%0A");`}
-
     &[aria-checked=true] {
-        opacity: 1;
-        background-image: ${`url(
-            "data:image/svg+xml,%3Csvg width='14' height='14' viewBox='0 0 14 14' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M3 0C1.34315 0 0 1.34315 0 3V11C0 12.6569 1.34315 14 3 14H11C12.6569 14 14 12.6569 14 11V3C14 1.34315 12.6569 0 11 0H3ZM4.26825 5.85982L5.95873 7.88839L9.70003 2.9C10.0314 2.45817 10.6582 2.36863 11.1 2.7C11.5419 3.03137 11.6314 3.65817 11.3 4.1L6.80002 10.1C6.41275 10.6164 5.64501 10.636 5.2318 10.1402L2.7318 7.14018C2.37824 6.71591 2.43556 6.08534 2.85984 5.73178C3.28412 5.37821 3.91468 5.43554 4.26825 5.85982Z' fill='${props.theme.accent.replace(
-              "#",
-              "%23"
-            )}' /%3E%3C/svg%3E%0A"
-        )`};
+      opacity: 1;
     }
 
     &:active {
       transform: scale(0.9);
+    }
+
+    svg {
+      display: block;
+      width: 14px;
+      height: 14px;
+      overflow: visible;
+    }
+
+    .checkbox-box {
+      fill: ${props.theme.accent};
+      fill-opacity: 0;
+      stroke: ${props.theme.text};
+      stroke-width: 2;
+      transition: fill-opacity 100ms ease-in-out, stroke 100ms ease-in-out;
+    }
+
+    .checkbox-tick {
+      fill: none;
+      stroke: ${props.theme.accentText};
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 14;
+      stroke-dashoffset: 14;
+      transition: stroke-dashoffset 200ms ease-in-out;
+    }
+
+    &[aria-checked=true] {
+      .checkbox-box {
+        fill-opacity: 1;
+        stroke: ${props.theme.accent};
+      }
+      .checkbox-tick {
+        stroke-dashoffset: 0;
+      }
+    }
+
+    /* Static fallback for environments without inline SVG (e.g. SSR) */
+    &:not(:has(svg)) {
+      background-image: ${`url("data:image/svg+xml,%3Csvg width='14' height='14' viewBox='0 0 14 14' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M3 0C1.34315 0 0 1.34315 0 3V11C0 12.6569 1.34315 14 3 14H11C12.6569 14 14 12.6569 14 11V3C14 1.34315 12.6569 0 11 0H3ZM3 2C2.44772 2 2 2.44772 2 3V11C2 11.5523 2.44772 12 3 12H11C11.5523 12 12 11.5523 12 11V3C12 2.44772 11.5523 2 11 2H3Z' fill='${props.theme.text.replace(
+        /#/g,
+        "%23"
+      )}' /%3E%3C/svg%3E%0A");`}
+
+      &[aria-checked=true] {
+        background-image: ${`url(
+            "data:image/svg+xml,%3Csvg width='14' height='14' viewBox='0 0 14 14' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M3 0C1.34315 0 0 1.34315 0 3V11C0 12.6569 1.34315 14 3 14H11C12.6569 14 14 12.6569 14 11V3C14 1.34315 12.6569 0 11 0H3ZM4.26825 5.85982L5.95873 7.88839L9.70003 2.9C10.0314 2.45817 10.6582 2.36863 11.1 2.7C11.5419 3.03137 11.6314 3.65817 11.3 4.1L6.80002 10.1C6.41275 10.6164 5.64501 10.636 5.2318 10.1402L2.7318 7.14018C2.37824 6.71591 2.43556 6.08534 2.85984 5.73178C3.28412 5.37821 3.91468 5.43554 4.26825 5.85982Z' fill='${props.theme.accent.replace(
+              /#/g,
+              "%23"
+            )}' /%3E%3C/svg%3E%0A"
+        )`};
+      }
     }
   }
 
@@ -1707,11 +1780,14 @@ code {
   font-family: ${props.theme.fontFamilyMono};
   font-size: 90%;
 
+  &.inline {
+    color: ${props.theme.codeKeyword};
+  }
+
   .${EditorStyleHelper.codeWord} {
     @media (min-width: ${breakpoints.tablet}px) {
       white-space: nowrap;
     }
-    color: ${props.theme.codeKeyword};
   }
 }
 
@@ -1734,20 +1810,27 @@ mark {
   height: 16px;
 }
 
-.code-block {
+.${EditorStyleHelper.codeBlock} {
   position: relative;
   font-size: 90%;
+
+  &:hover + .${EditorStyleHelper.codeBlockToggle},
+  &:focus-within + .${EditorStyleHelper.codeBlockToggle},
+  & + .${EditorStyleHelper.codeBlockToggle}:hover,
+  & + .${EditorStyleHelper.codeBlockToggle}:focus {
+    opacity: 1;
+  }
 }
 
-.code-block[data-language=none],
-.code-block[data-language=markdown] {
+.${EditorStyleHelper.codeBlock}[data-language=none],
+.${EditorStyleHelper.codeBlock}[data-language=markdown] {
   pre code {
     color: ${props.theme.text};
   }
 }
 
-.code-block[data-language=mermaid],
-.code-block[data-language=mermaidjs] {
+.${EditorStyleHelper.codeBlock}[data-language=mermaid],
+.${EditorStyleHelper.codeBlock}[data-language=mermaidjs] {
   ${
     !props.staticHTML &&
     css`
@@ -1760,7 +1843,8 @@ mark {
     `
   }
 
-  &:is(.code-active) + .mermaid-diagram-wrapper {
+  &:is(.code-active)
+    + .mermaid-diagram-wrapper:not(.parse-error):not(.empty) {
     cursor: zoom-in;
   }
 
@@ -1776,7 +1860,7 @@ mark {
     outline: none;
 
     & + .mermaid-diagram-wrapper {
-      &:not(.empty) {
+      &:not(.parse-error):not(.empty) {
         cursor: zoom-in;
       }
       outline: 2px solid ${props.theme.selected};
@@ -1784,19 +1868,19 @@ mark {
   }
 }
 
-.ProseMirror[contenteditable="false"] .code-block[data-language=mermaid],
-.ProseMirror[contenteditable="false"] .code-block[data-language=mermaidjs] {
+.ProseMirror[contenteditable="false"] .${EditorStyleHelper.codeBlock}[data-language=mermaid],
+.ProseMirror[contenteditable="false"] .${EditorStyleHelper.codeBlock}[data-language=mermaidjs] {
     height: 0;
     overflow: hidden;
 
-    & + .mermaid-diagram-wrapper {
+    & + .mermaid-diagram-wrapper:not(.parse-error):not(.empty) {
       cursor: zoom-in;
     }
 }
 
 .ProseMirror.exported {
-    .code-block[data-language=mermaid],
-    .code-block[data-language=mermaidjs] {
+    .${EditorStyleHelper.codeBlock}[data-language=mermaid],
+    .${EditorStyleHelper.codeBlock}[data-language=mermaidjs] {
         height: auto;
         overflow: visible;
 
@@ -1810,14 +1894,14 @@ mark {
     }
 }
 
-.code-block.with-line-wrap {
+.${EditorStyleHelper.codeBlock}.with-line-wrap {
   pre {
     white-space: pre-wrap;
     word-break: break-all;
   }
 }
 
-.code-block.with-line-numbers {
+.${EditorStyleHelper.codeBlock}.with-line-numbers {
   pre {
     padding-left: calc(var(--line-number-gutter-width, 0) * 1em + 1.5em);
   }
@@ -1838,6 +1922,88 @@ mark {
     text-align: right;
     font-variant-numeric: tabular-nums;
     user-select: none;
+  }
+}
+
+.${EditorStyleHelper.codeBlock}.collapsed {
+  pre {
+    pointer-events: none;
+    max-height: calc(10 * 1.4em + 0.75em);
+    overflow: hidden;
+  }
+
+  &::after {
+    max-height: calc(10 * 1.4em + 0.75em);
+    overflow: hidden;
+    clip-path: inset(0 0 calc(100% - 10 * 1.4em - 0.75em) 0);
+  }
+
+  &::before {
+    content: "";
+    position: absolute;
+    bottom: 1px;
+    left: 1px;
+    right: 1px;
+    height: 120px;
+    z-index: 1;
+    pointer-events: none;
+    border-radius: 0 0 4px 4px;
+    background: linear-gradient(
+      to bottom,
+      ${transparentize(1, props.theme.codeBackground)} 0%,
+      ${transparentize(0.2, props.theme.codeBackground)} 70%,
+      ${props.theme.codeBackground} 100%
+    );
+  }
+
+  @media print {
+    pre {
+      max-height: none;
+      overflow: visible;
+    }
+
+    &::after {
+      max-height: none;
+      overflow: visible;
+      clip-path: none;
+    }
+
+    &::before {
+      display: none;
+    }
+  }
+}
+
+.${EditorStyleHelper.codeBlockToggle} {
+  display: inline-flex;
+  align-items: center;
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  transform: translate3d(-50%, -50px, 0);
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 100px;
+  background: ${props.theme.background};
+  color: ${props.theme.buttonNeutralText};
+  box-shadow: rgba(0, 0, 0, 0.07) 0px 1px 2px, ${props.theme.buttonNeutralBorder} 0 0 0 1px inset;
+  font-size: 13px;
+  font-weight: 500;
+  height: 24px;
+  cursor: var(--pointer);
+  user-select: none;
+  appearance: none !important;
+  opacity: 0;
+  transition: opacity 150ms ease;
+  pointer-events: auto;
+
+  &:hover {
+    background: ${props.theme.backgroundSecondary};
+  }
+
+  @media print {
+    display: none !important;
   }
 }
 
@@ -1933,7 +2099,6 @@ table {
     position: relative;
     padding: 4px 8px;
     text-align: start;
-    min-width: 100px;
     font-weight: normal;
     border-left: 1px solid ${props.theme.divider};
     border-top: 1px solid ${props.theme.divider};
@@ -1947,11 +2112,6 @@ table {
     );
     color: ${props.theme.textSecondary};
     font-weight: 500;
-  }
-
-  tr:first-child {
-    position: relative;
-    z-index: 2;
   }
 
   tr:first-child th,
@@ -2001,6 +2161,10 @@ table {
     /* fixes Firefox background color painting over border:
       * https://bugzilla.mozilla.org/show_bug.cgi?id=688556 */
     background-clip: padding-box;
+
+    @media print {
+      box-shadow: none;
+    }
   }
 
   .${EditorStyleHelper.tableAddRow},
@@ -2310,12 +2474,24 @@ table {
 }
 
 .${EditorStyleHelper.tableStickyHeader} {
-  tr:first-child th {
-    transform: translateY(calc(var(--header-offset, 64px) + var(--sticky-scroll-offset, 0px)));
-    border-bottom: 1px solid ${props.theme.divider};
+  > .${EditorStyleHelper.tableScrollable} > table > tbody > tr:first-child {
+    position: relative;
+    z-index: 2;
 
-    // Mask content scrolling past the top of the header
-    box-shadow: 0 -1px 0 ${props.theme.divider};
+    > th {
+      // Safari requires the header cell to have raised z-index too
+      z-index: 2;
+    }
+  }
+
+  > .${EditorStyleHelper.tableScrollable} > table > tbody > tr:first-child > th {
+    transform: translateY(calc(var(--header-offset, ${HEADER_HEIGHT}px) + var(--sticky-scroll-offset, 0px)));
+
+    // Mask content scrolling past the top of the header (first shadow) and draw
+    // the divider below it (second shadow). Using box-shadow rather than a real
+    // border avoids changing the row height when the sticky class toggles, which
+    // otherwise causes a flicker loop at the bottom of the table via scroll anchoring.
+    box-shadow: 0 -1px 0 ${props.theme.divider}, 0 1px 0 ${props.theme.divider};
     border-radius: 0 !important;
 
     .${EditorStyleHelper.tableGripColumn},
@@ -2326,8 +2502,43 @@ table {
     }
   }
 
-  .${EditorStyleHelper.tableGrip} {
+  > .${EditorStyleHelper.tableGrip} {
     display: none;
+  }
+}
+
+.${EditorStyleHelper.tableStickyColumn} {
+  // The padding of the scroll container also holds the column back, so the
+  // column stops at the same place it sits when the table is not scrolled.
+  > .${EditorStyleHelper.tableScrollable} > table > tbody > tr > th[data-first-column] {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+  }
+
+  // The first cell is part of both the sticky row and column, so it goes above both.
+  &.${EditorStyleHelper.tableStickyHeader} > .${EditorStyleHelper.tableScrollable} > table > tbody > tr:first-child > th[data-first-column] {
+    z-index: 3;
+  }
+
+  // Move the scroll shadow from the edge of the table to the edge of the column.
+  &.${EditorStyleHelper.tableShadowLeft} {
+    &::before {
+      box-shadow: none;
+    }
+
+    > .${EditorStyleHelper.tableScrollable} > table > tbody > tr > th[data-first-column]::after {
+      content: "";
+      position: absolute;
+      top: -1px;
+      bottom: -1px;
+      right: -${EditorStyleHelper.padding}px;
+      width: ${EditorStyleHelper.padding}px;
+      pointer-events: none;
+      box-shadow: 16px 0 16px -16px inset rgba(0, 0, 0, ${
+        props.theme.isDark ? 1 : 0.25
+      });
+    }
   }
 }
 
@@ -2338,6 +2549,7 @@ table {
   scrollbar-color: transparent transparent;
   overflow-y: hidden;
   overflow-x: auto;
+  overflow-anchor: none;
   padding-top: 1em;
   padding-bottom: .5em;
   padding-left: ${EditorStyleHelper.padding}px;
@@ -2453,12 +2665,6 @@ table {
   animation: ProseMirror-cursor-blink 1.1s steps(2, start) infinite;
 }
 
-.folded-content,
-.folded-content + .mermaid-diagram-wrapper {
-  display: none;
-  user-select: none;
-}
-
 @keyframes ProseMirror-cursor-blink {
   to {
     visibility: hidden;
@@ -2475,16 +2681,18 @@ del {
 }
 
 @media print {
+  // The heading level labels are an editing affordance, but the same pseudo
+  // element carries the heading prefix, which is content and must be printed.
   .placeholder::before,
   .block-menu-trigger,
-  .heading-actions,
+  .heading-anchor,
   button.show-source-button,
-  h1:not(.placeholder)::before,
-  h2:not(.placeholder)::before,
-  h3:not(.placeholder)::before,
-  h4:not(.placeholder)::before,
-  h5:not(.placeholder)::before,
-  h6:not(.placeholder)::before {
+  h1:not(.placeholder):not([data-heading-prefix])::before,
+  h2:not(.placeholder):not([data-heading-prefix])::before,
+  h3:not(.placeholder):not([data-heading-prefix])::before,
+  h4:not(.placeholder):not([data-heading-prefix])::before,
+  h5:not(.placeholder):not([data-heading-prefix])::before,
+  h6:not(.placeholder):not([data-heading-prefix])::before {
     display: none;
   }
 
@@ -2512,27 +2720,37 @@ del {
   }
 }
 
-.toggle-block {
+li > .${EditorStyleHelper.toggleBlock} {
+  position: relative;
+  /* Nudge the toggle to visually align with the first line of list-item text.
+     Keep this in em so it scales with the current font size. */
+  top: 0.4em;
+}
+
+.${EditorStyleHelper.toggleBlock} {
   display: flex;
+  /* Establish a positioning context so comment gutters on nested content anchor
+     here (flush with the content column) rather than the padded .ProseMirror. */
+  position: relative;
 
   &:focus-within {
     transition-delay: 0.1s;
   }
 
-  &.folded {
+  &.${EditorStyleHelper.toggleBlockFolded} {
     &:dir(rtl) {
       --rotate-by: 90deg;
     }
     &:dir(ltr) {
       --rotate-by: -90deg;
     }
-    > .toggle-block-content > :is(:not(.toggle-block-head)) {
+    > .${EditorStyleHelper.toggleBlockContent} > :is(:not(.${EditorStyleHelper.toggleBlockHead})) {
       display: none;
     }
-    > .toggle-block-content > :is(a.heading-name) {
+    > .${EditorStyleHelper.toggleBlockContent} > :is(a.heading-name) {
       display: unset;
     }
-    > .toggle-block-button {
+    > .${EditorStyleHelper.toggleBlockButton} {
       svg {
         transform: rotate(var(--rotate-by));
         pointer-events: none;
@@ -2541,7 +2759,7 @@ del {
     }
   }
 
-  > .toggle-block-button {
+  > .${EditorStyleHelper.toggleBlockButton} {
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -2551,22 +2769,22 @@ del {
     --line-height: var(--line-height-p);
     --font-size: var(--font-size-p);
 
-    &:has(+ .toggle-block-content > .toggle-block-head > h1) {
+    &:has(+ .${EditorStyleHelper.toggleBlockContent} > .${EditorStyleHelper.toggleBlockHead} > h1) {
       --line-height: calc(var(--line-height-h) + 0.2);
       --font-size: var(--font-size-h1);
     }
 
-    &:has(+ .toggle-block-content > .toggle-block-head > h2) {
+    &:has(+ .${EditorStyleHelper.toggleBlockContent} > .${EditorStyleHelper.toggleBlockHead} > h2) {
       --line-height: calc(var(--line-height-h) + 0.2);
       --font-size: var(--font-size-h2);
     }
 
-    &:has(+ .toggle-block-content > .toggle-block-head > h3) {
+    &:has(+ .${EditorStyleHelper.toggleBlockContent} > .${EditorStyleHelper.toggleBlockHead} > h3) {
       --line-height: calc(var(--line-height-h) + 0.2);
       --font-size: var(--font-size-h3);
     }
 
-    &:has(+ .toggle-block-content > .toggle-block-head > h4) {
+    &:has(+ .${EditorStyleHelper.toggleBlockContent} > .${EditorStyleHelper.toggleBlockHead} > h4) {
       --line-height: calc(var(--line-height-h) + 0.2);
       --font-size: var(--font-size-h4);
     }
@@ -2594,16 +2812,36 @@ del {
     }
   }
 
-  > .toggle-block-content {
-    > :is(:not(.toggle-block-head)) {
+  > .${EditorStyleHelper.toggleBlockContent} {
+    > :is(:not(.${EditorStyleHelper.toggleBlockHead})) {
       margin-top: 0.5em;
     }
     > :is(:first-child) {
       margin-top: 0;
     }
-    > .toggle-block-head {
+    > .${EditorStyleHelper.toggleBlockHead} {
+      /* The title acts as a fold/unfold control when the document is read-only */
+      ${props.readOnly ? "cursor: var(--pointer);" : ""}
+
       > * {
         margin-top: 0;
+      }
+
+      /* When the title is a heading, match the placeholder text to its size */
+      &.placeholder:has(> :is(h1, h2, h3, h4))::before {
+        font-weight: 600;
+      }
+      &.placeholder:has(> h1)::before {
+        font-size: var(--font-size-h1);
+      }
+      &.placeholder:has(> h2)::before {
+        font-size: var(--font-size-h2);
+      }
+      &.placeholder:has(> h3)::before {
+        font-size: var(--font-size-h3);
+      }
+      &.placeholder:has(> h4)::before {
+        font-size: var(--font-size-h4);
       }
     }
     flex-grow: 1;

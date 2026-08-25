@@ -1,5 +1,8 @@
+import { clamp } from "es-toolkit";
+import { t } from "i18next";
 import { action, computed, observable } from "mobx";
 import { flushSync } from "react-dom";
+import { toast } from "sonner";
 import { light as defaultTheme } from "@shared/styles/theme";
 import type { ProsemirrorData } from "@shared/types";
 import Storage from "@shared/utils/Storage";
@@ -7,13 +10,12 @@ import Document from "~/models/Document";
 import type Model from "~/models/base/Model";
 import Collection from "~/models/Collection";
 import type { ConnectionStatus } from "~/scenes/Document/components/MultiplayerEditor";
+import type { SplitViewPane } from "~/utils/splitView";
+import { isTruthyQueryValue } from "~/utils/urls";
 import { startViewTransition } from "~/utils/viewTransition";
 import type RootStore from "./RootStore";
 
 const UI_STORE = "UI_STORE";
-
-// Whether the window launched with sidebar force hidden
-let sidebarHidden = window.location.search.includes("sidebarHidden=true");
 
 export enum Theme {
   Light = "light",
@@ -25,6 +27,11 @@ export enum SystemTheme {
   Light = "light",
   Dark = "dark",
 }
+
+export type ResolvedTheme = "light" | "dark" | "system";
+
+/** The panels that can be displayed in the right sidebar. */
+export type RightSidebarPanel = "comments" | "history";
 
 type PersistedData = Pick<
   UiStore,
@@ -78,8 +85,25 @@ class UiStore {
   @observable
   sidebarCollapsed = false;
 
+  // Whether the sidebar is hidden entirely, e.g. when embedding a document via
+  // the ?sidebarHidden=1 query parameter. Not persisted across reloads.
   @observable
-  rightSidebar: "comments" | "history" | null = null;
+  sidebarHidden = isTruthyQueryValue(
+    new URLSearchParams(window.location.search).get("sidebarHidden")
+  );
+
+  @observable
+  rightSidebar: RightSidebarPanel | null = null;
+
+  // The right sidebar panel displayed in the secondary split view pane. Not
+  // persisted as the pane itself only exists for the current session.
+  @observable
+  secondaryRightSidebar: RightSidebarPanel | null = null;
+
+  // The fraction of the split view's width occupied by the primary pane. Not
+  // persisted, reset when the split view closes.
+  @observable
+  splitViewRatio = 0.5;
 
   @observable
   sidebarIsResizing = false;
@@ -111,7 +135,7 @@ class UiStore {
   setPresentingDocument = (document: Document | null): void => {
     this.presentationData = document
       ? {
-          title: document.title,
+          title: document.titleWithDefault,
           icon: document.icon,
           color: document.color,
           data: document.data,
@@ -134,9 +158,20 @@ class UiStore {
     const data: PersistedData = Storage.get(UI_STORE) || {};
     this.languagePromptDismissed = data.languagePromptDismissed;
     this.sidebarCollapsed = !!data.sidebarCollapsed;
-    this.sidebarWidth = data.sidebarWidth || defaultTheme.sidebarWidth;
-    this.sidebarRightWidth =
-      data.sidebarRightWidth || defaultTheme.sidebarRightWidth;
+    // Widths are clamped as a drag may have been interrupted while stretched beyond the bounds,
+    // or the bounds themselves may have since changed.
+    const { sidebarResizeMinWidth: minWidth, sidebarMaxWidth: maxWidth } =
+      defaultTheme;
+    this.sidebarWidth = clamp(
+      data.sidebarWidth || defaultTheme.sidebarWidth,
+      minWidth,
+      maxWidth
+    );
+    this.sidebarRightWidth = clamp(
+      data.sidebarRightWidth || defaultTheme.sidebarRightWidth,
+      minWidth,
+      maxWidth
+    );
     this.tocVisible = data.tocVisible;
     this.rightSidebar = data.rightSidebar ?? null;
     this.theme = data.theme || Theme.System;
@@ -153,14 +188,21 @@ class UiStore {
 
       setSystemTheme(colorSchemeQueryList);
 
-      if (colorSchemeQueryList.addListener) {
+      if (typeof colorSchemeQueryList.addEventListener === "function") {
+        colorSchemeQueryList.addEventListener("change", setSystemTheme);
+      } else if (typeof colorSchemeQueryList.addListener === "function") {
         colorSchemeQueryList.addListener(setSystemTheme);
       }
     }
 
     window.addEventListener("storage", (event) => {
       if (event.key === UI_STORE && event.newValue) {
-        const newData: PersistedData | null = JSON.parse(event.newValue);
+        let newData: PersistedData | null;
+        try {
+          newData = JSON.parse(event.newValue);
+        } catch {
+          return;
+        }
 
         // data may be null if key is deleted in localStorage
         if (!newData) {
@@ -202,7 +244,9 @@ class UiStore {
    * @param modelClass the model class to filter by.
    * @returns array of active models of the specified type.
    */
-  getActiveModels<T extends Model>(modelClass: new (...args: any[]) => T): T[] {
+  getActiveModels<T extends Model>(
+    modelClass: new (...args: never[]) => T
+  ): T[] {
     return Array.from(this.activeModels.values()).filter(
       (model) => model.constructor === modelClass
     ) as T[];
@@ -224,7 +268,7 @@ class UiStore {
    * @param modelClass optional model class to filter by.
    */
   @action
-  clearActiveModels(modelClass?: new (...args: any[]) => Model): void {
+  clearActiveModels(modelClass?: new (...args: never[]) => Model): void {
     if (modelClass) {
       const modelsToRemove = this.getActiveModels(modelClass);
       modelsToRemove.forEach((model) => this.activeModels.delete(model.id));
@@ -240,7 +284,7 @@ class UiStore {
    * @returns the most recently added model of the specified type.
    */
   getPrimaryActiveModel<T extends Model>(
-    modelClass: new (...args: any[]) => T
+    modelClass: new (...args: never[]) => T
   ): T | undefined {
     const models = this.getActiveModels<T>(modelClass);
     return models[models.length - 1];
@@ -253,6 +297,12 @@ class UiStore {
 
   @computed
   get activeCollectionId(): string | undefined {
+    // Derive from the active document so it resolves even if the collection
+    // loads after the document became active.
+    const activeDocument = this.getPrimaryActiveModel<Document>(Document);
+    if (activeDocument?.isActive && activeDocument.collectionId) {
+      return activeDocument.collectionId;
+    }
     return this.getPrimaryActiveModel<Collection>(Collection)?.id;
   }
 
@@ -318,6 +368,46 @@ class UiStore {
     this.sidebarIsResizing = sidebarIsResizing;
   };
 
+  /**
+   * Sets the fraction of the split view's width occupied by the primary pane,
+   * clamped so that neither pane becomes unusably narrow.
+   *
+   * @param ratio the fraction of the split view's width for the primary pane.
+   */
+  @action
+  setSplitViewRatio = (ratio: number): void => {
+    this.splitViewRatio = Math.min(0.8, Math.max(0.2, ratio));
+  };
+
+  /**
+   * Returns the right sidebar panel displayed in the given split view pane.
+   *
+   * @param pane the split view pane, defaults to the primary pane.
+   * @returns the panel displayed in the pane, or null when closed.
+   */
+  getRightSidebar = (
+    pane: SplitViewPane = "primary"
+  ): RightSidebarPanel | null =>
+    pane === "secondary" ? this.secondaryRightSidebar : this.rightSidebar;
+
+  /**
+   * Sets the right sidebar panel displayed in the given split view pane.
+   *
+   * @param panel the panel to display, or null to close the sidebar.
+   * @param pane the split view pane, defaults to the primary pane.
+   */
+  @action
+  setRightSidebar = (
+    panel: RightSidebarPanel | null,
+    pane: SplitViewPane = "primary"
+  ): void => {
+    if (pane === "secondary") {
+      this.secondaryRightSidebar = panel;
+    } else {
+      this.rightSidebar = panel;
+    }
+  };
+
   @action
   setActiveCollection = (collectionId: string | undefined): void => {
     if (collectionId === undefined || collectionId === null) {
@@ -354,7 +444,7 @@ class UiStore {
 
   @action
   expandSidebar = () => {
-    sidebarHidden = false;
+    this.sidebarHidden = false;
     this.set({ sidebarCollapsed: false });
   };
 
@@ -369,7 +459,7 @@ class UiStore {
 
   @action
   toggleCollapsedSidebar = () => {
-    sidebarHidden = false;
+    this.sidebarHidden = false;
     this.set({ sidebarCollapsed: !this.sidebarCollapsed });
   };
 
@@ -398,13 +488,32 @@ class UiStore {
     this.debugSafeArea = !this.debugSafeArea;
   };
 
+  /**
+   * Display a toast for an export that is being prepared in the background,
+   * it is updated in place once the export completes or fails.
+   *
+   * @param fileOperationId The identifier of the export file operation.
+   */
   @action
-  registerExportToast = (
-    fileOperationId: string,
-    toastId: string,
-    timeoutId: ReturnType<typeof setTimeout>
-  ) => {
+  showExportToast = (fileOperationId: string) => {
+    const toastId = `export-${fileOperationId}`;
+
+    const timeoutId = setTimeout(() => {
+      toast.success(t("Export started"), {
+        id: toastId,
+        description: t("A link to your file will be sent through email soon"),
+        duration: 3000,
+      });
+      this.exportToasts.delete(fileOperationId);
+    }, 6000);
+
     this.exportToasts.set(fileOperationId, { toastId, timeoutId });
+
+    toast.loading(t("Export started"), {
+      id: toastId,
+      description: `${t("Preparing your download")}…`,
+      duration: Infinity,
+    });
   };
 
   @action
@@ -433,7 +542,7 @@ class UiStore {
    */
   @computed
   get sidebarIsClosed() {
-    return this.sidebarCollapsed || sidebarHidden;
+    return this.sidebarCollapsed || this.sidebarHidden;
   }
 
   @computed
